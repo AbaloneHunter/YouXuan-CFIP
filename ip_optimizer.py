@@ -16,16 +16,16 @@ import ipaddress
 ####################################################
 CONFIG = {
     "MODE": "TCP",  # 测试模式：PING/TCP
-    "PING_TARGET": "https://www.apple.com/library/test/success.html",  # Ping测试目标http://www.baidu.com/favicon.ico,https://www.google.com/generate_204,http://www.gstatic.com/generate_204
+    "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标http://www.baidu.com/favicon.ico,https://www.google.com/generate_204,http://www.gstatic.com/generate_204
     "PING_COUNT": 3,  # Ping次数
-    "PING_TIMEOUT": 5,  # Ping超时(秒)
+    "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "10~2000",  # 延迟范围(ms)
+    "RTT_RANGE": "10~500",  # 延迟范围(ms)
     "LOSS_MAX": 30.0,  # 最大丢包率(%)
     "THREADS": 50,  # 并发线程数
     "IP_POOL_SIZE": 50000,  # IP池总大小 [新增]
-    "TEST_IP_COUNT": 1000,  # 实际测试IP数量 [新增]
-    "TOP_IPS_LIMIT": 15,  # 精选IP数量
+    "TEST_IP_COUNT": 5000,  # 实际测试IP数量 [新增]
+    "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
