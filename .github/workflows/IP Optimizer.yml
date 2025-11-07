@@ -13,9 +13,9 @@ jobs:
       PORT: 443
       RTT_RANGE: "40~250"
       LOSS_MAX: 10
-      THREADS: 50         # 默认并发数
+      THREADS: 80         # 默认并发数
       IP_POOL_SIZE: 100000 # IP池总大小 [新增]
-      TEST_IP_COUNT: 200  # 实际测试IP数量 [新增]
+      TEST_IP_COUNT: 500  # 实际测试IP数量 [新增]
       SPEED_URL: "https://speed.cloudflare.com/__down?bytes=10000000"
       CLOUDFLARE_IPS_URL: "www.cloudflare.com/ips-v4"
       CUSTOM_IPS_FILE: "custom_ips.txt" # 自定义IP池文件
@@ -39,8 +39,8 @@ jobs:
 
     - name: Commit results
       run: |
-        git config user.name "github-actions"
-        git config user.email "actions@github.com"
+        git config user.name "AbaloneHunter"
+        git config user.email "codger.gg@gmail.com"
         git add results/
         git commit -m "Auto: Update optimized IPs"
         git push
