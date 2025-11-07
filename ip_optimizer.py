@@ -34,7 +34,7 @@ CONFIG = {
     
     # 新增：地区配置（从JS版本移植）
     "ENABLE_REGION_MATCHING": True,  # 启用地区匹配
-    "MANUAL_WORKER_REGION": "SG",  # 手动指定Worker地区
+    "MANUAL_WORKER_REGION": "CN",  # 手动指定Worker地区
     "REGION_MAPPING": {
         'US': ['🇺🇸 美国', 'US', 'United States'],
         'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],
