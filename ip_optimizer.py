@@ -70,6 +70,52 @@ CONFIG = {
 }
 
 ####################################################
+# 新增：格式化输出函数
+####################################################
+
+def format_ip_with_region(ip_data, port=None):
+    """
+    格式化IP输出为 ip:端口#国旗 地区名称 格式
+    """
+    if port is None:
+        port = int(os.getenv('PORT', 443))
+    
+    region_code = ip_data.get('regionCode', 'Unknown')
+    region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])
+    flag_and_name = region_info[0]  # 获取国旗和地区名称
+    
+    return f"{ip_data['ip']}:{port}#{flag_and_name}"
+
+def format_ip_list_for_display(ip_list, port=None):
+    """
+    格式化IP列表用于显示
+    """
+    if port is None:
+        port = int(os.getenv('PORT', 443))
+    
+    formatted_ips = []
+    for ip_data in ip_list:
+        formatted_ips.append(format_ip_with_region(ip_data, port))
+    
+    return formatted_ips
+
+def format_ip_list_for_file(ip_list, port=None):
+    """
+    格式化IP列表用于文件保存
+    """
+    if port is None:
+        port = int(os.getenv('PORT', 443))
+    
+    formatted_lines = []
+    for ip_data in ip_list:
+        region_code = ip_data.get('regionCode', 'Unknown')
+        region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])
+        flag_and_name = region_info[0]
+        formatted_lines.append(f"{ip_data['ip']}:{port}#{flag_and_name}")
+    
+    return formatted_lines
+
+####################################################
 # 从JS版本移植的地区管理功能
 ####################################################
 
@@ -356,7 +402,7 @@ def enhance_ip_with_region_info(ip_list, worker_region):
         else:
             region_code = random.choice(list(CONFIG["REGION_MAPPING"].keys()))
         
-        region_name = CONFIG["REGION_MAPPING"].get(region_code, [f"未知({region_code})"])[0]
+        region_name = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])[0]
         
         enhanced_ip = {
             'ip': ip,
@@ -531,12 +577,13 @@ if __name__ == "__main__":
         for ip_data in enhanced_results:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
     
-    # 保存精选IP
-    with open('results/top_ips.txt', 'w') as f:
-        f.write("\n".join([ip['ip'] for ip in sorted_ips]))
+    # 保存精选IP - 使用新格式
+    with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
+        formatted_lines = format_ip_list_for_file(sorted_ips)
+        f.write("\n".join(formatted_lines))
     
     # 保存精选IP详细信息
-    with open('results/top_ips_details.csv', 'w') as f:
+    with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
         f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地区代码,地区名称,ISP\n")
         for ip_data in sorted_ips:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
@@ -563,7 +610,7 @@ if __name__ == "__main__":
             region_stats[region]['avg_speed'] /= region_stats[region]['count']
 
     # 保存地区统计
-    with open('results/region_stats.csv', 'w') as f:
+    with open('results/region_stats.csv', 'w', encoding='utf-8') as f:
         f.write("地区代码,地区名称,IP数量,平均延迟(ms),平均速度(Mbps)\n")
         for region, stats in region_stats.items():
             f.write(f"{region},{stats['region_name']},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f}\n")
@@ -586,13 +633,21 @@ if __name__ == "__main__":
         print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
     
     if sorted_ips:
-        print(f"\n🏆【最佳IP TOP5】")
-        for i, ip_data in enumerate(sorted_ips[:5]):
-            region_flag = CONFIG["REGION_MAPPING"].get(ip_data['regionCode'], [''])[0].split(' ')[0]
-            print(f"{i+1}. {ip_data['ip']} | {region_flag}{ip_data['regionName']} | 延迟:{ip_data['rtt']:.2f}ms | 丢包:{ip_data['loss']:.2f}% | 速度:{ip_data['speed']:.2f}Mbps")
+        print(f"\n🏆【最佳IP TOP10】")
+        formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
+        for i, formatted_ip in enumerate(formatted_top_ips, 1):
+            print(f"{i}. {formatted_ip}")
+        
+        print(f"\n📋【全部精选IP】")
+        formatted_all_ips = format_ip_list_for_display(sorted_ips)
+        # 每行显示2个IP（因为包含国旗和中文名称，长度较长）
+        for i in range(0, len(formatted_all_ips), 2):
+            line_ips = formatted_all_ips[i:i+2]
+            print("  " + "  ".join(line_ips))
     
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
-    print("📊 新增文件:")
-    print("   - region_stats.csv (地区统计)")
-    print("   - 所有CSV文件现在包含地区信息")
+    print("📊 文件说明:")
+    print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 地区名称)")
+    print("   - top_ips_details.csv: 详细性能数据")
+    print("   - region_stats.csv: 地区统计信息")
