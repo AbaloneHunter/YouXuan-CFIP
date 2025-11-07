@@ -15,7 +15,7 @@ import ipaddress
 # 可配置参数（程序开头）
 ####################################################
 CONFIG = {
-    "MODE": "PING",  # 测试模式：PING/TCP
+    "MODE": "TCP",  # 测试模式：PING/TCP
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
     "PING_COUNT": 5,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
