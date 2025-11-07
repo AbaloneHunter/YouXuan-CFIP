@@ -1,9 +1,9 @@
 name: IP Optimizer
 on:
   schedule:
-  - cron: '0 */2 * * *'    # 每2小时在整点运行（包括0点）
-  workflow_dispatch:       # 允许手动触发
-  push:                    # 允许提交触发
+  - cron: '0 * * * *'    # 每小时的0分运行（每小时整点运行）
+  workflow_dispatch:     # 允许手动触发
+  push:                  # 允许提交触发
 
 jobs:
   optimize:
@@ -11,9 +11,9 @@ jobs:
     env:
       MODE: TCP
       PORT: 443
-      RTT_RANGE: "10~500"
+      RTT_RANGE: "10~250"
       LOSS_MAX: 10
-      THREADS: 80         # 默认并发数
+      THREADS: 50         # 默认并发数
       IP_POOL_SIZE: 100000 # IP池总大小 [新增]
       TEST_IP_COUNT: 5000  # 实际测试IP数量 [新增]
       SPEED_URL: "https://speed.cloudflare.com/__down?bytes=10000000"
