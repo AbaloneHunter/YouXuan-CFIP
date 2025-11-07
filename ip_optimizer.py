@@ -15,16 +15,16 @@ import ipaddress
 # 可配置参数（程序开头）
 ####################################################
 CONFIG = {
-    "MODE": "TCP",  # 测试模式：PING/TCP
+    "MODE": "PING",  # 测试模式：PING/TCP
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
-    "PING_COUNT": 3,  # Ping次数
+    "PING_COUNT": 5,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "10~250",  # 延迟范围(ms)
     "LOSS_MAX": 30.0,  # 最大丢包率(%)
     "THREADS": 50,  # 并发线程数
-    "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 5000,  # 实际测试IP数量
+    "IP_POOL_SIZE": 10000,  # IP池总大小
+    "TEST_IP_COUNT": 500,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
@@ -34,7 +34,7 @@ CONFIG = {
     
     # 新增：地区配置（从JS版本移植）
     "ENABLE_REGION_MATCHING": True,  # 启用地区匹配
-    "MANUAL_WORKER_REGION": "CN",  # 手动指定Worker地区
+    "MANUAL_WORKER_REGION": "HK",  # 手动指定Worker地区
     "REGION_MAPPING": {
         'US': ['🇺🇸 美国', 'US', 'United States'],
         'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],
