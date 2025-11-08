@@ -12,10 +12,10 @@ import urllib3
 import ipaddress
 
 ####################################################
-# 可配置参数（程序开头）
+# 可配置参数（程序开头）- 修改为默认TCP模式
 ####################################################
 CONFIG = {
-    "MODE": "REAL_CONNECTION",  # 测试模式：PING/TCP/REAL_CONNECTION
+    "MODE": "TCP",  # 默认使用TCP模式测速
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
     "PING_COUNT": 8,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
@@ -31,12 +31,6 @@ CONFIG = {
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    
-    # 真连接模式配置
-    "REAL_CONNECTION_TIMEOUT": 8,  # 真连接超时时间
-    "REAL_CONNECTION_RETRY": 1,  # 真连接重试次数
-    "REAL_CONNECTION_SPEED_TEST": True,  # 是否在真连接模式下进行速度测试
-    "REAL_CONNECTION_SPEED_SAMPLE_SIZE": 500000,  # 真连接速度测试采样大小(字节)
     
     # 新增：地区配置（从JS版本移植）
     "ENABLE_REGION_MATCHING": True,  # 启用地区匹配
@@ -86,147 +80,6 @@ CONFIG = {
 # 新增：IP地理位置缓存
 ####################################################
 ip_geo_cache = {}
-
-####################################################
-# 新增：真连接测试函数
-####################################################
-
-def real_connection_test(ip, port=443, timeout=8, retry=1, speed_test=True, sample_size=500000):
-    """
-    真连接测试 - 模拟真实HTTP/HTTPS连接
-    返回: (延迟ms, 丢包率%, 速度Mbps, 连接成功率%)
-    """
-    test_urls = [
-        "https://www.cloudflare.com/cdn-cgi/trace",
-        "https://www.gstatic.com/generate_204",
-        "https://cp.cloudflare.com/generate_204"
-    ]
-    
-    total_rtt = 0
-    success_count = 0
-    total_speed = 0
-    speed_test_count = 0
-    
-    for attempt in range(retry):
-        for test_url in test_urls:
-            try:
-                # 解析URL获取host
-                parsed_url = urlparse(test_url)
-                host = parsed_url.hostname
-                
-                # 设置自定义DNS解析
-                original_getaddrinfo = socket.getaddrinfo
-                socket.getaddrinfo = lambda *args, **kwargs: original_getaddrinfo(ip, args[1], args[2], args[3], args[4])
-                
-                # 测量连接建立时间
-                start_time = time.time()
-                
-                # 创建会话
-                session = requests.Session()
-                
-                # 设置超时和headers
-                connect_timeout = min(3, timeout)
-                read_timeout = timeout
-                
-                # 测试连接建立
-                response = session.get(
-                    test_url,
-                    headers={
-                        'Host': host,
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    },
-                    timeout=(connect_timeout, read_timeout),
-                    verify=False,
-                    stream=True
-                )
-                
-                # 计算连接建立时间
-                connect_time = (time.time() - start_time) * 1000
-                
-                # 如果启用速度测试且响应正常
-                if speed_test and response.status_code == 200:
-                    speed_start = time.time()
-                    downloaded_bytes = 0
-                    
-                    # 下载指定大小的数据来测试速度
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            downloaded_bytes += len(chunk)
-                            if downloaded_bytes >= sample_size:
-                                break
-                            if time.time() - speed_start > timeout:
-                                break
-                    
-                    speed_duration = time.time() - speed_start
-                    if speed_duration > 0 and downloaded_bytes > 0:
-                        speed_mbps = (downloaded_bytes * 8) / speed_duration / 1000000
-                        total_speed += speed_mbps
-                        speed_test_count += 1
-                
-                # 更新统计
-                total_rtt += connect_time
-                success_count += 1
-                
-                # 恢复原始DNS解析
-                socket.getaddrinfo = original_getaddrinfo
-                
-                # 成功一次就跳出URL循环
-                break
-                
-            except requests.exceptions.ConnectTimeout:
-                # 连接超时
-                continue
-            except requests.exceptions.ReadTimeout:
-                # 读取超时，但连接已建立
-                if speed_test:
-                    # 即使超时也记录部分速度
-                    partial_time = time.time() - start_time
-                    if partial_time > 0:
-                        # 估算一个较低的速度
-                        estimated_speed = min(5.0, sample_size * 8 / partial_time / 1000000)
-                        total_speed += estimated_speed
-                        speed_test_count += 1
-                total_rtt += timeout * 1000  # 使用超时时间作为延迟
-                success_count += 1
-                socket.getaddrinfo = original_getaddrinfo
-                break
-            except Exception as e:
-                # 其他错误
-                continue
-            finally:
-                # 确保恢复原始DNS解析
-                try:
-                    socket.getaddrinfo = original_getaddrinfo
-                except:
-                    pass
-    
-    # 计算平均指标
-    total_attempts = retry * len(test_urls)
-    connection_success_rate = (success_count / total_attempts * 100) if total_attempts > 0 else 0
-    
-    if success_count > 0:
-        avg_rtt = total_rtt / success_count
-        avg_speed = total_speed / speed_test_count if speed_test_count > 0 else 0
-    else:
-        avg_rtt = float('inf')
-        avg_speed = 0
-    
-    # 丢包率 = 连接失败率
-    loss_rate = 100 - connection_success_rate
-    
-    return avg_rtt, loss_rate, avg_speed, connection_success_rate
-
-def real_connection_ping(ip):
-    """真连接模式下的ping测试入口"""
-    port = int(os.getenv('PORT', 443))
-    timeout = int(os.getenv('REAL_CONNECTION_TIMEOUT', 8))
-    retry = int(os.getenv('REAL_CONNECTION_RETRY', 1))
-    speed_test = os.getenv('REAL_CONNECTION_SPEED_TEST', 'True').lower() == 'true'
-    
-    rtt, loss, speed, success_rate = real_connection_test(
-        ip, port, timeout, retry, speed_test
-    )
-    return (ip, rtt, loss, speed, success_rate)
 
 ####################################################
 # 新增：真实IP地理位置检测函数
@@ -648,40 +501,17 @@ def speed_test(ip):
 
 def ping_test(ip):
     """Ping测试入口"""
-    mode = os.getenv('MODE')
-    
-    if mode == "PING":
+    if os.getenv('MODE') == "PING":
         rtt, loss = custom_ping(ip)
-        return (ip, rtt, loss)
-    elif mode == "TCP":
-        rtt, loss = tcp_ping(ip, int(os.getenv('PORT')))
-        return (ip, rtt, loss)
-    elif mode == "REAL_CONNECTION":
-        # 真连接模式返回 (ip, rtt, loss, speed, success_rate)
-        return real_connection_ping(ip)
     else:
-        # 默认使用TCP模式
         rtt, loss = tcp_ping(ip, int(os.getenv('PORT')))
-        return (ip, rtt, loss)
+    return (ip, rtt, loss)
 
 def full_test(ip_data):
     """完整测试（Ping + 速度）"""
-    mode = os.getenv('MODE')
     ip = ip_data[0]
-    
-    if mode == "REAL_CONNECTION":
-        # 真连接模式已经在ping_test中包含了速度测试
-        if len(ip_data) >= 5:
-            # 已经有速度数据，直接返回
-            return ip_data
-        else:
-            # 如果没有速度数据，进行补充测速
-            speed = speed_test(ip)
-            return (*ip_data, speed)
-    else:
-        # 传统模式需要单独测速
-        speed = speed_test(ip)
-        return (*ip_data, speed)
+    speed = speed_test(ip)
+    return (*ip_data, speed)
 
 def enhance_ip_with_region_info(ip_list, worker_region):
     """
@@ -695,16 +525,8 @@ def enhance_ip_with_region_info(ip_list, worker_region):
             ip = ip_data[0]
             rtt = ip_data[1]
             loss = ip_data[2]
+            speed = ip_data[3] if len(ip_data) > 3 else 0
             
-            # 根据模式获取速度数据
-            if len(ip_data) > 3:
-                speed = ip_data[3]
-            else:
-                speed = 0
-                
-            # 真连接模式有额外的成功率数据
-            success_rate = ip_data[4] if len(ip_data) > 4 else 100
-
             # 使用真实API获取地区
             region_code = get_real_ip_region(ip)
             
@@ -720,7 +542,6 @@ def enhance_ip_with_region_info(ip_list, worker_region):
                 'rtt': rtt,
                 'loss': loss,
                 'speed': speed,
-                'successRate': success_rate,
                 'regionCode': region_code,
                 'regionName': region_name,
                 'isp': f"Cloudflare"
@@ -739,29 +560,9 @@ if __name__ == "__main__":
     
     # 1. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v2.5 (真连接速度测试版)':^60}")
+    print(f"{'IP网络优化器 v2.4 (TCP模式测速)':^60}")
     print("="*60)
-    
-    mode = os.getenv('MODE')
-    print(f"测试模式: {mode}")
-    
-    if mode == "REAL_CONNECTION":
-        print(f"真连接超时: {os.getenv('REAL_CONNECTION_TIMEOUT')}秒")
-        print(f"真连接重试: {os.getenv('REAL_CONNECTION_RETRY')}次")
-        print(f"速度测试: {'启用' if os.getenv('REAL_CONNECTION_SPEED_TEST', 'True').lower() == 'true' else '禁用'}")
-        print(f"采样大小: {os.getenv('REAL_CONNECTION_SPEED_SAMPLE_SIZE')}字节")
-    elif mode == "PING":
-        print(f"Ping目标: {os.getenv('PING_TARGET')}")
-        print(f"Ping次数: {os.getenv('PING_COUNT')}")
-        print(f"Ping超时: {os.getenv('PING_TIMEOUT')}秒")
-    else:
-        print(f"TCP端口: {os.getenv('PORT')}")
-        print(f"TCP重试: {os.getenv('TCP_RETRY')}次")
-    
-    print(f"延迟范围: {os.getenv('RTT_RANGE')}ms")
-    print(f"最大丢包: {os.getenv('LOSS_MAX')}%")
-    print(f"并发线程: {os.getenv('THREADS')}")
-    print(f"IP池大小: {os.getenv('IP_POOL_SIZE')}")
+    print(f"测试模式: {os.getenv('MODE')} (默认TCP模式)")
     
     # 检测Worker地区
     worker_region = detect_worker_region()
@@ -773,16 +574,25 @@ if __name__ == "__main__":
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
     print(f"地理位置API: 启用 (ip-api.com, ipapi.co, ip.useragentinfo.com)")
     
+    if os.getenv('MODE') == "PING":
+        print(f"Ping目标: {os.getenv('PING_TARGET')}")
+        print(f"Ping次数: {os.getenv('PING_COUNT')}")
+        print(f"Ping超时: {os.getenv('PING_TIMEOUT')}秒")
+    else:
+        print(f"TCP端口: {os.getenv('PORT')}")
+        print(f"TCP重试: {os.getenv('TCP_RETRY')}次")
+        print(f"延迟范围: {os.getenv('RTT_RANGE')}ms")
+        print(f"最大丢包: {os.getenv('LOSS_MAX')}%")
+        print(f"并发线程: {os.getenv('THREADS')}")
+        print(f"IP池大小: {os.getenv('IP_POOL_SIZE')}")
+    
     print(f"测试IP数: {os.getenv('TEST_IP_COUNT')}")
     custom_file = os.getenv('CUSTOM_IPS_FILE')
     if custom_file:
         print(f"自定义IP池: {custom_file}")
     else:
         print(f"Cloudflare IP源: {os.getenv('CLOUDFLARE_IPS_URL')}")
-    
-    if mode != "REAL_CONNECTION":
-        print(f"测速URL: {os.getenv('SPEED_URL')}")
-    
+    print(f"测速URL: {os.getenv('SPEED_URL')}")
     print("="*60 + "\n")
 
     # 2. 获取IP段并生成随机IP池
@@ -816,15 +626,13 @@ if __name__ == "__main__":
     test_ip_pool = random.sample(list(full_ip_pool), test_ip_count)
     print(f"🔧 从大池中随机选择 {len(test_ip_pool)} 个IP进行测试")
 
-    # 3. 第一阶段：测试（筛选IP）
+    # 3. 第一阶段：TCP Ping测试（筛选IP）
     ping_results = []
-    test_desc = "🚀 真连接测试进度" if mode == "REAL_CONNECTION" else "🚀 Ping测试进度"
-    
     with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in test_ip_pool}
         with tqdm(
             total=len(test_ip_pool),
-            desc=test_desc,
+            desc="🚀 TCP Ping测试进度",
             unit="IP",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
         ) as pbar:
@@ -832,56 +640,39 @@ if __name__ == "__main__":
                 try:
                     ping_results.append(future.result())
                 except Exception as e:
-                    print(f"\n🔧 测试异常: {e}")
+                    print(f"\n🔧 TCP Ping测试异常: {e}")
                 finally:
                     pbar.update(1)
     
     rtt_min, rtt_max = map(int, os.getenv('RTT_RANGE').split('~'))
     loss_max = float(os.getenv('LOSS_MAX'))
-    
-    # 根据模式筛选通过的IP
-    if mode == "REAL_CONNECTION":
-        # 真连接模式：使用连接成功率作为主要指标
-        passed_ips = [
-            ip_data for ip_data in ping_results
-            if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max and ip_data[4] >= 50  # 成功率至少50%
-        ]
-    else:
-        # 传统模式
-        passed_ips = [
-            ip_data for ip_data in ping_results
-            if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
-        ]
-    
-    print(f"\n✅ 测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
+    passed_ips = [
+        ip_data for ip_data in ping_results
+        if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
+    ]
+    print(f"\n✅ TCP Ping测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
 
-    # 4. 第二阶段：补充测速（如果需要）
+    # 4. 第二阶段：测速（仅对通过TCP Ping测试的IP）
     if not passed_ips:
-        print("❌ 没有通过测试的IP，程序终止")
+        print("❌ 没有通过TCP Ping测试的IP，程序终止")
         exit(1)
     
     full_results = []
-    
-    if mode != "REAL_CONNECTION" or os.getenv('REAL_CONNECTION_SPEED_TEST', 'True').lower() != 'true':
-        # 需要额外测速的情况
-        with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
-            future_to_ip = {executor.submit(full_test, ip_data): ip_data for ip_data in passed_ips}
-            with tqdm(
-                total=len(passed_ips),
-                desc="📊 测速进度",
-                unit="IP",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-            ) as pbar:
-                for future in as_completed(future_to_ip):
-                    try:
-                        full_results.append(future.result())
-                    except Exception as e:
-                        print(f"\n🔧 测速异常: {e}")
-                    finally:
-                        pbar.update(1)
-    else:
-        # 真连接模式且已经包含速度测试，直接使用结果
-        full_results = passed_ips
+    with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
+        future_to_ip = {executor.submit(full_test, ip_data): ip_data for ip_data in passed_ips}
+        with tqdm(
+            total=len(passed_ips),
+            desc="📊 测速进度",
+            unit="IP",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+        ) as pbar:
+            for future in as_completed(future_to_ip):
+                try:
+                    full_results.append(future.result())
+                except Exception as e:
+                    print(f"\n🔧 测速异常: {e}")
+                finally:
+                    pbar.update(1)
 
     # 5. 为IP添加真实地区信息
     enhanced_results = enhance_ip_with_region_info(full_results, worker_region)
@@ -892,32 +683,18 @@ if __name__ == "__main__":
         region_sorted_ips = get_smart_region_selection(worker_region, enhanced_results)
         
         # 在地区排序的基础上，再按速度和质量排序
-        if mode == "REAL_CONNECTION":
-            # 真连接模式：优先考虑连接成功率
-            sorted_ips = sorted(
-                region_sorted_ips,
-                key=lambda x: (-x['speed'], x['rtt'], -x['successRate'])
-            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
-        else:
-            # 传统模式
-            sorted_ips = sorted(
-                region_sorted_ips,
-                key=lambda x: (-x['speed'], x['rtt'], x['loss'])
-            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
+        sorted_ips = sorted(
+            region_sorted_ips,
+            key=lambda x: (-x['speed'], x['rtt'], x['loss'])
+        )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
     else:
-        # 传统排序方式
-        if mode == "REAL_CONNECTION":
-            sorted_ips = sorted(
-                enhanced_results,
-                key=lambda x: (-x['speed'], x['rtt'], -x['successRate'])
-            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
-        else:
-            sorted_ips = sorted(
-                enhanced_results,
-                key=lambda x: (-x['speed'], x['rtt'])
-            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
+        # 传统排序方式（按速度降序，延迟升序）
+        sorted_ips = sorted(
+            enhanced_results,
+            key=lambda x: (-x['speed'], x['rtt'])
+        )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
 
-    # 7. 保存结果
+    # 7. 保存结果 - 新增纯IP:端口格式文件
     os.makedirs('results', exist_ok=True)
     
     # 保存所有测试过的IP
@@ -930,14 +707,9 @@ if __name__ == "__main__":
     
     # 保存完整结果（CSV格式）
     with open('results/full_results.csv', 'w') as f:
-        if mode == "REAL_CONNECTION":
-            f.write("IP,延迟(ms),丢包率(%),速度(Mbps),连接成功率(%),地区代码,地区名称,ISP\n")
-            for ip_data in enhanced_results:
-                f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['successRate']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
-        else:
-            f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地区代码,地区名称,ISP\n")
-            for ip_data in enhanced_results:
-                f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地区代码,地区名称,ISP\n")
+        for ip_data in enhanced_results:
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
     
     # 保存精选IP - 包含地区信息
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
@@ -951,14 +723,9 @@ if __name__ == "__main__":
     
     # 保存精选IP详细信息
     with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
-        if mode == "REAL_CONNECTION":
-            f.write("IP,延迟(ms),丢包率(%),速度(Mbps),连接成功率(%),地区代码,地区名称,ISP\n")
-            for ip_data in sorted_ips:
-                f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['successRate']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
-        else:
-            f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地区代码,地区名称,ISP\n")
-            for ip_data in sorted_ips:
-                f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地区代码,地区名称,ISP\n")
+        for ip_data in sorted_ips:
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
     
     # 8. 按地区分组统计
     region_stats = {}
@@ -969,74 +736,53 @@ if __name__ == "__main__":
                 'count': 0,
                 'avg_rtt': 0,
                 'avg_speed': 0,
-                'avg_success_rate': 0,
                 'region_name': ip_data['regionName']
             }
         region_stats[region]['count'] += 1
         region_stats[region]['avg_rtt'] += ip_data['rtt']
         region_stats[region]['avg_speed'] += ip_data['speed']
-        if mode == "REAL_CONNECTION":
-            region_stats[region]['avg_success_rate'] += ip_data.get('successRate', 100)
     
     # 计算平均值
     for region in region_stats:
         if region_stats[region]['count'] > 0:
             region_stats[region]['avg_rtt'] /= region_stats[region]['count']
             region_stats[region]['avg_speed'] /= region_stats[region]['count']
-            if mode == "REAL_CONNECTION":
-                region_stats[region]['avg_success_rate'] /= region_stats[region]['count']
 
     # 保存地区统计
     with open('results/region_stats.csv', 'w', encoding='utf-8') as f:
-        if mode == "REAL_CONNECTION":
-            f.write("地区代码,地区名称,IP数量,平均延迟(ms),平均速度(Mbps),平均连接成功率(%)\n")
-            for region, stats in region_stats.items():
-                f.write(f"{region},{stats['region_name']},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f},{stats['avg_success_rate']:.2f}\n")
-        else:
-            f.write("地区代码,地区名称,IP数量,平均延迟(ms),平均速度(Mbps)\n")
-            for region, stats in region_stats.items():
-                f.write(f"{region},{stats['region_name']},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f}\n")
+        f.write("地区代码,地区名称,IP数量,平均延迟(ms),平均速度(Mbps)\n")
+        for region, stats in region_stats.items():
+            f.write(f"{region},{stats['region_name']},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f}\n")
 
     # 9. 显示统计结果
     print("\n" + "="*60)
-    print(f"{'🔥 测试结果统计':^60}")
+    print(f"{'🔥 TCP模式测速结果统计':^60}")
     print("="*60)
     print(f"IP池大小: {ip_pool_size}")
     print(f"实际测试IP数: {len(ping_results)}")
-    print(f"通过测试IP数: {len(passed_ips)}")
+    print(f"通过TCP Ping测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
     print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
-    print(f"测试模式: {mode}")
     
     # 显示地区分布
     print(f"\n🌍 地区分布 (基于真实地理位置API):")
     for region, stats in sorted(region_stats.items(), key=lambda x: x[1]['count'], reverse=True):
-        if mode == "REAL_CONNECTION":
-            print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps, 成功率{stats['avg_success_rate']:.1f}%")
-        else:
-            print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
+        print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
     
     if sorted_ips:
         # 显示带地区信息的最佳IP
         print(f"\n🏆【最佳IP TOP10 (带地区信息)】")
         formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
         for i, formatted_ip in enumerate(formatted_top_ips, 1):
-            ip_data = sorted_ips[i-1]
-            if mode == "REAL_CONNECTION":
-                print(f"{i}. {formatted_ip} | 延迟:{ip_data['rtt']:.1f}ms | 速度:{ip_data['speed']:.1f}Mbps | 成功率:{ip_data['successRate']:.1f}%")
-            else:
-                print(f"{i}. {formatted_ip} | 延迟:{ip_data['rtt']:.1f}ms | 速度:{ip_data['speed']:.1f}Mbps")
+            print(f"{i}. {formatted_ip}")
         
         # 新增：显示纯IP:端口格式
         print(f"\n🏆【最佳IP TOP10 (纯IP:端口)】")
         for i, ip_data in enumerate(sorted_ips[:10], 1):
             plain_ip = format_ip_with_port_only(ip_data)
-            if mode == "REAL_CONNECTION":
-                print(f"{i}. {plain_ip} | 延迟:{ip_data['rtt']:.1f}ms | 速度:{ip_data['speed']:.1f}Mbps | 成功率:{ip_data['successRate']:.1f}%")
-            else:
-                print(f"{i}. {plain_ip} | 延迟:{ip_data['rtt']:.1f}ms | 速度:{ip_data['speed']:.1f}Mbps")
+            print(f"{i}. {plain_ip}")
         
         print(f"\n📋【全部精选IP (带地区信息)】")
         formatted_all_ips = format_ip_list_for_display(sorted_ips)
@@ -1051,7 +797,7 @@ if __name__ == "__main__":
         # 每行显示4个IP（纯IP格式较短）
         for i in range(0, len(plain_all_ips), 4):
             line_ips = plain_all_ips[i:i+4]
-            print("  " + "  ".join(line_ips"))
+            print("  " + "  ".join(line_ips))
     
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
@@ -1060,8 +806,4 @@ if __name__ == "__main__":
     print("   - top_ips_plain.txt: 纯IP:端口格式 (无地区信息)")
     print("   - top_ips_details.csv: 详细性能数据")
     print("   - region_stats.csv: 地区统计信息")
-    
-    if mode == "REAL_CONNECTION":
-        print("   - 注意: 真连接模式测试结果更接近实际使用体验")
-    else:
-        print("   - 注意: 地区信息基于真实IP地理位置API，与ping0.cc结果一致")
+    print("   - 注意: 地区信息基于真实IP地理位置API，与ping0.cc结果一致")
