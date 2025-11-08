@@ -1,6 +1,5 @@
 import os
-import asyncio
-import aiohttp
+import requests
 import random
 import numpy as np
 import time
@@ -16,7 +15,6 @@ import ipaddress
 import psutil
 from typing import List, Dict, Tuple, Any
 import json
-import hashlib
 
 ####################################################
 # 可配置参数（程序开头）
@@ -32,10 +30,9 @@ CONFIG = {
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~800",  # 延迟范围(ms)
     "LOSS_MAX": 10.0,  # 最大丢包率(%)
-    "THREADS": 500,  # 增加并发线程数
-    "ASYNC_CONCURRENCY": 1000,  # 异步并发数
+    "THREADS": 300,  # 优化并发线程数
     "IP_POOL_SIZE": 50000,  # IP池总大小
-    "TEST_IP_COUNT": 2000,  # 增加测试IP数量
+    "TEST_IP_COUNT": 1500,  # 测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
@@ -115,7 +112,7 @@ CONFIG = {
 }
 
 ####################################################
-# 新增：性能监控类
+# 性能监控类
 ####################################################
 class PerformanceMonitor:
     def __init__(self):
@@ -123,7 +120,8 @@ class PerformanceMonitor:
             'network_usage': [],
             'memory_usage': [],
             'scan_speed': [],
-            'start_time': time.time()
+            'start_time': time.time(),
+            'completed_tasks': []
         }
         self.running = False
         
@@ -145,7 +143,7 @@ class PerformanceMonitor:
                     # 扫描速度
                     elapsed = time.time() - self.metrics['start_time']
                     if elapsed > 0:
-                        speed = len(self.metrics.get('completed_tasks', [])) / elapsed
+                        speed = len(self.metrics['completed_tasks']) / elapsed
                         self.metrics['scan_speed'].append(speed)
                     
                     time.sleep(1)
@@ -160,10 +158,19 @@ class PerformanceMonitor:
         """停止监控"""
         self.running = False
     
+    def add_completed_task(self):
+        """添加完成的任务"""
+        self.metrics['completed_tasks'].append(time.time())
+    
     def get_stats(self):
         """获取统计信息"""
         if not self.metrics['memory_usage']:
-            return "暂无数据"
+            return {
+                'avg_memory_usage': 0,
+                'max_memory_usage': 0,
+                'avg_scan_speed': 0,
+                'total_network_usage': 0
+            }
         
         return {
             'avg_memory_usage': np.mean(self.metrics['memory_usage']),
@@ -173,7 +180,7 @@ class PerformanceMonitor:
         }
 
 ####################################################
-# 新增：智能IP生成器
+# 智能IP生成器
 ####################################################
 class IntelligentIPGenerator:
     def __init__(self, target_regions=None):
@@ -252,56 +259,50 @@ class IntelligentIPGenerator:
         return memory.percent > 90  # 内存使用超过90%时停止
 
 ####################################################
-# 新增：异步URL测试引擎
+# 优化的URL测试引擎（同步版本）
 ####################################################
-class AsyncURLTester:
+class OptimizedURLTester:
     def __init__(self):
-        self.connector = None
-        self.session = None
+        self.session = requests.Session()
+        # 配置会话池
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=100,
+            pool_maxsize=100,
+            max_retries=2
+        )
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
+        self.session.verify = False
         
-    async def __aenter__(self):
-        # 创建连接池
-        self.connector = aiohttp.TCPConnector(
-            limit=CONFIG["ASYNC_CONCURRENCY"],
-            limit_per_host=50,
-            ttl_dns_cache=300,
-            use_dns_cache=True
-        )
-        self.session = aiohttp.ClientSession(
-            connector=self.connector,
-            timeout=aiohttp.ClientTimeout(total=CONFIG["URL_TEST_TIMEOUT"]),
-            headers={'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)'}
-        )
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
-        if self.connector:
-            await self.connector.close()
-    
-    async def test_ip_batch(self, ip_batch, test_url, progress_callback=None):
+    def test_ip_batch(self, ip_batch, test_url, progress_callback=None, monitor=None):
         """批量测试IP"""
-        tasks = []
-        for ip in ip_batch:
-            task = asyncio.create_task(self._test_single_ip(ip, test_url))
-            tasks.append(task)
-        
         results = []
-        for future in asyncio.as_completed(tasks):
-            try:
-                result = await future
-                results.append(result)
-                if progress_callback:
-                    progress_callback(1)
-            except Exception as e:
-                if progress_callback:
-                    progress_callback(1)
-                continue
+        
+        with ThreadPoolExecutor(max_workers=min(100, len(ip_batch))) as executor:
+            future_to_ip = {
+                executor.submit(self._test_single_ip, ip, test_url): ip 
+                for ip in ip_batch
+            }
+            
+            for future in as_completed(future_to_ip):
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                    if progress_callback:
+                        progress_callback(1)
+                    if monitor:
+                        monitor.add_completed_task()
+                except Exception:
+                    if progress_callback:
+                        progress_callback(1)
+                    if monitor:
+                        monitor.add_completed_task()
+                    continue
         
         return results
     
-    async def _test_single_ip(self, ip, test_url):
+    def _test_single_ip(self, ip, test_url):
         """测试单个IP"""
         parsed_url = urlparse(test_url)
         scheme = parsed_url.scheme
@@ -322,31 +323,41 @@ class AsyncURLTester:
                 else:
                     actual_url = f"{scheme}://{ip}{path}"
                 
-                headers = {'Host': hostname}
+                headers = {
+                    'Host': hostname,
+                    'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
+                    'Accept': '*/*',
+                    'Connection': 'close'
+                }
                 
-                async with self.session.get(
+                response = self.session.get(
                     actual_url,
                     headers=headers,
-                    ssl=False
-                ) as response:
-                    # 读取部分内容确认连接
-                    await response.read()
-                    
-                    rtt = (time.time() - start_time) * 1000
-                    
-                    if response.status < 500:
-                        success_count += 1
-                        total_rtt += rtt
-                        delays.append(rtt)
+                    timeout=CONFIG["URL_TEST_TIMEOUT"],
+                    stream=True
+                )
                 
-            except (asyncio.TimeoutError, aiohttp.ClientError, OSError):
+                rtt = (time.time() - start_time) * 1000
+                
+                if response.status_code < 500:
+                    success_count += 1
+                    total_rtt += rtt
+                    delays.append(rtt)
+                
+                response.close()
+                
+            except (requests.exceptions.Timeout, 
+                   requests.exceptions.ConnectionError,
+                   requests.exceptions.SSLError,
+                   socket.timeout,
+                   socket.gaierror):
                 continue
             except Exception:
                 continue
             
             # 短暂间隔
             if attempt < CONFIG["URL_TEST_RETRY"] - 1:
-                await asyncio.sleep(0.05)
+                time.sleep(0.05)
         
         # 计算平均延迟和丢包率
         if success_count > 0:
@@ -624,14 +635,14 @@ def enhance_ip_with_region_info(ip_list, worker_region):
 def print_config_info():
     """打印配置信息"""
     print("="*60)
-    print(f"{'🚀 IP网络优化器 v2.0 (异步增强版)':^60}")
+    print(f"{'🚀 IP网络优化器 v2.0 (优化同步版)':^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
     worker_region = detect_worker_region()
     print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
     print(f"智能IP生成: {'启用' if CONFIG['INTELLIGENT_IP_GENERATION'] else '禁用'}")
-    print(f"异步并发数: {CONFIG['ASYNC_CONCURRENCY']}")
+    print(f"并发线程数: {CONFIG['THREADS']}")
     print(f"测试IP数量: {CONFIG['TEST_IP_COUNT']}")
     print("="*60 + "\n")
 
@@ -728,8 +739,8 @@ def display_final_results(sorted_ips, enhanced_results, monitor):
 ####################################################
 # 主程序入口
 ####################################################
-async def main_async():
-    """异步主函数"""
+def main():
+    """主函数"""
     # 初始化环境和监控
     init_env()
     monitor = PerformanceMonitor()
@@ -758,22 +769,23 @@ async def main_async():
         test_ip_pool = ip_generator.generate_ip_pool_optimized(subnets, test_ip_count)
         print(f"✅ 成功生成 {len(test_ip_pool)} 个测试IP")
         
-        # 4. 异步URL测试
-        print(f"🚀 开始异步URL测试 (并发数: {CONFIG['ASYNC_CONCURRENCY']})...")
+        # 4. 优化的URL测试
+        print(f"🚀 开始优化URL测试 (批量处理)...")
         
-        batch_size = CONFIG["ASYNC_CONCURRENCY"]
+        batch_size = 100  # 分批处理避免内存问题
         all_results = []
+        tester = OptimizedURLTester()
         
-        with tqdm(total=len(test_ip_pool), desc="🌐 异步URL测试", unit="IP") as pbar:
-            async with AsyncURLTester() as tester:
-                for i in range(0, len(test_ip_pool), batch_size):
-                    batch = test_ip_pool[i:i + batch_size]
-                    batch_results = await tester.test_ip_batch(
-                        batch, 
-                        CONFIG["URL_TEST_TARGET"],
-                        progress_callback=lambda x: pbar.update(x)
-                    )
-                    all_results.extend(batch_results)
+        with tqdm(total=len(test_ip_pool), desc="🌐 URL测试进度", unit="IP") as pbar:
+            for i in range(0, len(test_ip_pool), batch_size):
+                batch = test_ip_pool[i:i + batch_size]
+                batch_results = tester.test_ip_batch(
+                    batch, 
+                    CONFIG["URL_TEST_TARGET"],
+                    progress_callback=lambda x: pbar.update(x),
+                    monitor=monitor
+                )
+                all_results.extend(batch_results)
         
         # 5. 筛选合格IP
         rtt_min, rtt_max = map(int, CONFIG["RTT_RANGE"].split('~'))
@@ -831,5 +843,4 @@ async def main_async():
         monitor.stop_monitoring()
 
 if __name__ == "__main__":
-    # 运行异步主函数
-    asyncio.run(main_async())
+    main()
