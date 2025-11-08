@@ -19,11 +19,11 @@ CONFIG = {
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
     "URL_TEST_TARGET": "https://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 5,  # URL测试超时(秒)
-    "URL_TEST_RETRY": 2,  # URL测试重试次数
+    "URL_TEST_RETRY": 5,  # URL测试重试次数
     "PING_COUNT": 5,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "0~100",  # 延迟范围(ms)
+    "RTT_RANGE": "0~800",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
     "THREADS": 200,  # 并发线程数
     "IP_POOL_SIZE": 20000,  # IP池总大小
