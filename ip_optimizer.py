@@ -20,10 +20,10 @@ CONFIG = {
     "PING_COUNT": 5,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "10~250",  # 延迟范围(ms)
+    "RTT_RANGE": "2~250",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
     "THREADS": 80,  # 并发线程数
-    "IP_POOL_SIZE": 50000,  # IP池总大小
+    "IP_POOL_SIZE": 80000,  # IP池总大小
     "TEST_IP_COUNT": 800,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
@@ -191,7 +191,7 @@ def get_region_by_rtt(rtt, worker_region):
         return random.choice(['US', 'DE', 'GB'])
 
 ####################################################
-# 格式化输出函数
+# 格式化输出函数 - 修改为包含ip:端口格式
 ####################################################
 
 def format_ip_with_region(ip_data, port=None):
@@ -207,9 +207,18 @@ def format_ip_with_region(ip_data, port=None):
     
     return f"{ip_data['ip']}:{port}#{flag_and_name}"
 
+def format_ip_with_port_only(ip_data, port=None):
+    """
+    只输出 ip:端口 格式
+    """
+    if port is None:
+        port = int(os.getenv('PORT', 443))
+    
+    return f"{ip_data['ip']}:{port}"
+
 def format_ip_list_for_display(ip_list, port=None):
     """
-    格式化IP列表用于显示
+    格式化IP列表用于显示（包含地区和纯IP:端口）
     """
     if port is None:
         port = int(os.getenv('PORT', 443))
@@ -220,19 +229,23 @@ def format_ip_list_for_display(ip_list, port=None):
     
     return formatted_ips
 
-def format_ip_list_for_file(ip_list, port=None):
+def format_ip_list_for_file(ip_list, port=None, include_region=True):
     """
     格式化IP列表用于文件保存
+    include_region: 是否包含地区信息
     """
     if port is None:
         port = int(os.getenv('PORT', 443))
     
     formatted_lines = []
     for ip_data in ip_list:
-        region_code = ip_data.get('regionCode', 'Unknown')
-        region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])
-        flag_and_name = region_info[0]
-        formatted_lines.append(f"{ip_data['ip']}:{port}#{flag_and_name}")
+        if include_region:
+            region_code = ip_data.get('regionCode', 'Unknown')
+            region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])
+            flag_and_name = region_info[0]
+            formatted_lines.append(f"{ip_data['ip']}:{port}#{flag_and_name}")
+        else:
+            formatted_lines.append(f"{ip_data['ip']}:{port}")
     
     return formatted_lines
 
@@ -681,7 +694,7 @@ if __name__ == "__main__":
             key=lambda x: (-x['speed'], x['rtt'])
         )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
 
-    # 7. 保存结果
+    # 7. 保存结果 - 新增纯IP:端口格式文件
     os.makedirs('results', exist_ok=True)
     
     # 保存所有测试过的IP
@@ -698,9 +711,14 @@ if __name__ == "__main__":
         for ip_data in enhanced_results:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
     
-    # 保存精选IP - 使用新格式
+    # 保存精选IP - 包含地区信息
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
-        formatted_lines = format_ip_list_for_file(sorted_ips)
+        formatted_lines = format_ip_list_for_file(sorted_ips, include_region=True)
+        f.write("\n".join(formatted_lines))
+    
+    # 新增：保存纯IP:端口格式（无地区信息）
+    with open('results/top_ips_plain.txt', 'w', encoding='utf-8') as f:
+        formatted_lines = format_ip_list_for_file(sorted_ips, include_region=False)
         f.write("\n".join(formatted_lines))
     
     # 保存精选IP详细信息
@@ -754,22 +772,38 @@ if __name__ == "__main__":
         print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
     
     if sorted_ips:
-        print(f"\n🏆【最佳IP TOP10】")
+        # 显示带地区信息的最佳IP
+        print(f"\n🏆【最佳IP TOP10 (带地区信息)】")
         formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
         for i, formatted_ip in enumerate(formatted_top_ips, 1):
             print(f"{i}. {formatted_ip}")
         
-        print(f"\n📋【全部精选IP】")
+        # 新增：显示纯IP:端口格式
+        print(f"\n🏆【最佳IP TOP10 (纯IP:端口)】")
+        for i, ip_data in enumerate(sorted_ips[:10], 1):
+            plain_ip = format_ip_with_port_only(ip_data)
+            print(f"{i}. {plain_ip}")
+        
+        print(f"\n📋【全部精选IP (带地区信息)】")
         formatted_all_ips = format_ip_list_for_display(sorted_ips)
         # 每行显示2个IP（因为包含国旗和中文名称，长度较长）
         for i in range(0, len(formatted_all_ips), 2):
             line_ips = formatted_all_ips[i:i+2]
+            print("  " + "  ".join(line_ips))
+        
+        # 新增：显示纯IP:端口格式的全部IP
+        print(f"\n📋【全部精选IP (纯IP:端口)】")
+        plain_all_ips = format_ip_list_for_file(sorted_ips, include_region=False)
+        # 每行显示4个IP（纯IP格式较短）
+        for i in range(0, len(plain_all_ips), 4):
+            line_ips = plain_all_ips[i:i+4]
             print("  " + "  ".join(line_ips))
     
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
     print("📊 文件说明:")
     print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 地区名称)")
+    print("   - top_ips_plain.txt: 纯IP:端口格式 (无地区信息)")
     print("   - top_ips_details.csv: 详细性能数据")
     print("   - region_stats.csv: 地区统计信息")
     print("   - 注意: 地区信息基于真实IP地理位置API，与ping0.cc结果一致")
