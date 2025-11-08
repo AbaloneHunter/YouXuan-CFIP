@@ -17,18 +17,18 @@ import ipaddress
 CONFIG = {
     "MODE": "TCP",  # 测试模式：PING/TCP
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
-    "PING_COUNT": 8,  # Ping次数
+    "PING_COUNT": 5,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "10~300",  # 延迟范围(ms)
+    "RTT_RANGE": "0~300",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
-    "THREADS": 200,  # 并发线程数
+    "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 500000,  # IP池总大小
-    "TEST_IP_COUNT": 10000,  # 实际测试IP数量
+    "TEST_IP_COUNT": 30000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
-    "TCP_RETRY": 2,  # TCP重试次数
+    "TCP_RETRY": 3,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     
