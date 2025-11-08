@@ -1,39 +1,35 @@
-name: Build and Deploy
+name: Deploy to Main
 
 on:
   push:
     branches: [ dev ]
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. 获取 dev 分支的代码
-      - name: Checkout dev
+      - name: Checkout dev branch
         uses: actions/checkout@v4
         with:
-          ref: 'dev'
+          ref: dev
 
-      # 2. 设置环境并构建（这里根据你的项目需要修改）
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-      - name: Install dependencies and build
+      - name: Build process
         run: |
-          npm ci
-          npm run build
+          # 您的构建命令
+          echo "Building project..."
+          # 确保生成输出文件
 
-      # 3. 切换到 main 分支并部署结果
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@users.noreply.github.com'
+
       - name: Deploy to main
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          # 用于推送的个人访问令牌
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          # 构建结果的目录
-          publish_dir: ./dist
-          # 要推送到的分支
-          publish_branch: main
-          # 保留提交历史记录
-          force_orphan: false
+        run: |
+          git remote set-url origin https://git:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+          git checkout -b main
+          git add -f ./dist/  # 或您的输出目录
+          git commit -m "Deploy from dev branch"
+          git push origin main --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
