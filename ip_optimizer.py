@@ -11,603 +11,221 @@ from tqdm import tqdm
 import urllib3
 import ipaddress
 import json
+import re
 
 ####################################################
-# 可配置参数（程序开头）
+#                 可配置参数（程序开头）              #
 ####################################################
+# 环境变量默认值（可通过.env或GitHub Actions覆盖）
 CONFIG = {
-    "MODE": "TCP",  # 测试模式：PING/TCP
-    "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
-    "PING_COUNT": 3,  # Ping次数
-    "PING_TIMEOUT": 3,  # Ping超时(秒)
-    "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "10~250",  # 延迟范围(ms)
-    "LOSS_MAX": 30.0,  # 最大丢包率(%)
-    "THREADS": 50,  # 并发线程数
-    "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 5000,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 50,  # 精选IP数量
+    "MODE": "TCP",                  # 测试模式：PING/TCP
+    "PING_TARGET": "https://www.google.com/generate_204",  # Ping测试目标
+    "PING_COUNT": 3,                # Ping次数
+    "PING_TIMEOUT": 5,              # Ping超时(秒)
+    "PORT": 443,                    # TCP测试端口
+    "RTT_RANGE": "10~250",          # 延迟范围(ms)
+    "LOSS_MAX": 5.0,               # 最大丢包率(%)
+    "THREADS": 50,                  # 并发线程数
+    "IP_POOL_SIZE": 50000,          # IP池总大小
+    "TEST_IP_COUNT": 500,          # 实际测试IP数量
+    "TOP_IPS_LIMIT": 50,            # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
-    "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
-    "TCP_RETRY": 2,  # TCP重试次数
-    "SPEED_TIMEOUT": 5,  # 测速超时时间
+    "CUSTOM_IPS_FILE": "custom_ips.txt",          # 自定义IP池文件路径
+    "TCP_RETRY": 2,                 # TCP重试次数
+    "SPEED_TIMEOUT": 5,            # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    
-    # 地区配置 - 新增多地区支持
-    "ENABLE_REGION_MATCHING": True,  # 启用地区匹配
-    "MANUAL_WORKER_REGION": "SG",  # 手动指定Worker地区（主地区）
-    "TARGET_REGIONS": ["SG", "JP", "HK", "US"],  # 目标地区列表（支持多地区优选）
-    "REGION_MAPPING": {
-        'US': ['🇺🇸 美国', 'US', 'United States'],
-        'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],
-        'JP': ['🇯🇵 日本', 'JP', 'Japan'],
-        'HK': ['🇭🇰 香港', 'HK', 'Hong Kong'],
-        'KR': ['🇰🇷 韩国', 'KR', 'South Korea'],
-        'DE': ['🇩🇪 德国', 'DE', 'Germany'],
-        'SE': ['🇸🇪 瑞典', 'SE', 'Sweden'],
-        'NL': ['🇳🇱 荷兰', 'NL', 'Netherlands'],
-        'FI': ['🇫🇮 芬兰', 'FI', 'Finland'],
-        'GB': ['🇬🇧 英国', 'GB', 'United Kingdom'],
-        'Oracle': ['甲骨文', 'Oracle'],
-        'DigitalOcean': ['数码海', 'DigitalOcean'],
-        'Vultr': ['Vultr', 'Vultr'],
-        'Multacom': ['Multacom', 'Multacom']
-    },
-    "BACKUP_IPS": [
-        {'domain': 'ProxyIP.US.CMLiussss.net', 'region': 'US', 'regionCode': 'US', 'port': 443},
-        {'domain': 'ProxyIP.SG.CMLiussss.net', 'region': 'SG', 'regionCode': 'SG', 'port': 443},
-        {'domain': 'ProxyIP.JP.CMLiussss.net', 'region': 'JP', 'regionCode': 'JP', 'port': 443},
-        {'domain': 'ProxyIP.HK.CMLiussss.net', 'region': 'HK', 'regionCode': 'HK', 'port': 443},
-        {'domain': 'ProxyIP.KR.CMLiussss.net', 'region': 'KR', 'regionCode': 'KR', 'port': 443},
-        {'domain': 'ProxyIP.DE.CMLiussss.net', 'region': 'DE', 'regionCode': 'DE', 'port': 443},
-        {'domain': 'ProxyIP.SE.CMLiussss.net', 'region': 'SE', 'regionCode': 'SE', 'port': 443},
-        {'domain': 'ProxyIP.NL.CMLiussss.net', 'region': 'NL', 'regionCode': 'NL', 'port': 443},
-        {'domain': 'ProxyIP.FI.CMLiussss.net', 'region': 'FI', 'regionCode': 'FI', 'port': 443},
-        {'domain': 'ProxyIP.GB.CMLiussss.net', 'region': 'GB', 'regionCode': 'GB', 'port': 443},
-        {'domain': 'ProxyIP.Oracle.cmliussss.net', 'region': 'Oracle', 'regionCode': 'Oracle', 'port': 443},
-        {'domain': 'ProxyIP.DigitalOcean.CMLiussss.net', 'region': 'DigitalOcean', 'regionCode': 'DigitalOcean', 'port': 443},
-        {'domain': 'ProxyIP.Vultr.CMLiussss.net', 'region': 'Vultr', 'regionCode': 'Vultr', 'port': 443},
-        {'domain': 'ProxyIP.Multacom.CMLiussss.net', 'region': 'Multacom', 'regionCode': 'Multacom', 'port': 443}
-    ],
-    
-    # 真实IP地理位置查询配置
-    "ENABLE_REAL_GEO_LOCATION": True,  # 启用真实地理位置查询
-    "GEO_API_SOURCES": [
-        {
-            'name': 'ipapi.co',
-            'url': 'http://ipapi.co/{ip}/json/',
-            'country_field': 'country_code',
-            'city_field': 'city',
-            'isp_field': 'org'
-        },
-        {
-            'name': 'ipapi.com',
-            'url': 'https://ipapi.com/ip_api.php?ip={ip}',
-            'country_field': 'country_code',
-            'city_field': 'city',
-            'isp_field': 'isp'
-        },
-        {
-            'name': 'ip-api.com',
-            'url': 'http://ip-api.com/json/{ip}',
-            'country_field': 'countryCode',
-            'city_field': 'city',
-            'isp_field': 'isp'
-        }
-    ],
-    
-    # 优选配置
-    "PRE_SELECTION_COUNT": 200,  # 初次优选IP数量（用于地理位置查询）
-    "GEO_QUERY_WORKERS": 20,  # 地理位置查询并发数
-    
-    # 多地区优选配置 - 新增
-    "MULTI_REGION_SELECTION": True,  # 启用多地区优选
-    "REGION_IPS_LIMIT": 15,  # 每个地区最多选择的IP数量
-    "BALANCE_REGIONS": True,  # 是否平衡各地区IP数量
+    "REGIONS": "HK,TW,SG,JP,US,KR", # 优选地区代码
+    "GEOCHECK_TIMEOUT": 3,          # 地理位置查询超时
+    "PING0_API": "https://ping0.cc/api/ip"  # 地理位置查询API
 }
 
 ####################################################
-# 真实IP地理位置查询功能
+#                    核心功能函数                   #
 ####################################################
-
-def get_real_ip_location(ip, max_retries=2):
-    """
-    查询IP的真实地理位置信息
-    """
-    if not CONFIG["ENABLE_REAL_GEO_LOCATION"]:
-        return None
-    
-    for api_config in CONFIG["GEO_API_SOURCES"]:
-        for attempt in range(max_retries):
-            try:
-                url = api_config['url'].format(ip=ip)
-                response = requests.get(url, timeout=5, verify=False)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    country_code = data.get(api_config['country_field'], '').upper()
-                    city = data.get(api_config['city_field'], '')
-                    isp = data.get(api_config['isp_field'], '')
-                    
-                    if country_code:
-                        # 映射到我们的地区代码
-                        region_code = map_country_to_region(country_code)
-                        region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({country_code})", country_code])
-                        
-                        return {
-                            'ip': ip,
-                            'country_code': country_code,
-                            'region_code': region_code,
-                            'region_name': region_info[0],
-                            'city': city,
-                            'isp': isp,
-                            'source': api_config['name'],
-                            'success': True
-                        }
-                
-                time.sleep(0.5)  # 避免请求过于频繁
-                
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(0.5)
-                    continue
-                # 最后一个尝试也失败，继续下一个API
-    
-    return None
-
-def map_country_to_region(country_code):
-    """
-    将国家代码映射到我们的地区代码
-    """
-    country_to_region = {
-        # 北美
-        'US': 'US', 'CA': 'US',
-        # 亚洲
-        'SG': 'SG', 'JP': 'JP', 'KR': 'KR', 'TW': 'HK', 'MO': 'HK',
-        # 欧洲
-        'DE': 'DE', 'FR': 'DE', 'IT': 'DE', 'ES': 'DE', 'NL': 'NL', 
-        'SE': 'SE', 'FI': 'FI', 'GB': 'GB', 'UK': 'GB',
-        # 其他常见映射
-        'AU': 'SG', 'NZ': 'SG',  # 澳大利亚和新西兰映射到新加坡
-        'IN': 'SG',  # 印度映射到新加坡
-        'BR': 'US',  # 巴西映射到美国
-        'RU': 'DE',  # 俄罗斯映射到德国
-    }
-    
-    return country_to_region.get(country_code, country_code)
-
-def batch_get_ip_locations(ip_list, max_workers=10):
-    """
-    批量查询IP地理位置
-    """
-    if not CONFIG["ENABLE_REAL_GEO_LOCATION"]:
-        return {}
-    
-    print(f"🔍 正在查询 {len(ip_list)} 个优选IP的真实地理位置...")
-    
-    location_cache = {}
-    ip_chunks = [ip_list[i:i + 50] for i in range(0, len(ip_list), 50)]  # 分批处理
-    
-    for chunk_idx, ip_chunk in enumerate(ip_chunks):
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_ip = {executor.submit(get_real_ip_location, ip): ip for ip in ip_chunk}
-            
-            with tqdm(
-                total=len(ip_chunk),
-                desc=f"查询地理位置 {chunk_idx+1}/{len(ip_chunks)}",
-                unit="IP",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-            ) as pbar:
-                for future in as_completed(future_to_ip):
-                    ip = future_to_ip[future]
-                    try:
-                        location_info = future.result()
-                        if location_info and location_info['success']:
-                            location_cache[ip] = location_info
-                    except Exception as e:
-                        pass  # 忽略单个IP查询失败
-                    finally:
-                        pbar.update(1)
-        
-        # 每批之间休息一下，避免被API限制
-        if chunk_idx < len(ip_chunks) - 1:
-            time.sleep(2)
-    
-    print(f"✅ 地理位置查询完成: 成功 {len(location_cache)}/{len(ip_list)}")
-    return location_cache
-
-####################################################
-# 多地区优选功能 - 新增
-####################################################
-
-def multi_region_selection(enhanced_ips, target_regions, region_ips_limit=15, balance_regions=True):
-    """
-    多地区优选算法
-    """
-    if not CONFIG["MULTI_REGION_SELECTION"]:
-        # 如果不启用多地区优选，返回原始排序
-        return enhanced_ips[:CONFIG["TOP_IPS_LIMIT"]]
-    
-    print(f"🌍 正在进行多地区优选，目标地区: {', '.join(target_regions)}")
-    
-    # 按地区分组
-    region_groups = {}
-    for ip_data in enhanced_ips:
-        region = ip_data.get('regionCode', 'Unknown')
-        if region not in region_groups:
-            region_groups[region] = []
-        region_groups[region].append(ip_data)
-    
-    # 对每个地区的IP按性能排序
-    for region in region_groups:
-        region_groups[region] = sorted(
-            region_groups[region],
-            key=lambda x: (-x['speed'], x['rtt'], x['loss'])
-        )
-    
-    selected_ips = []
-    
-    if balance_regions:
-        # 平衡选择：每个地区选择相同数量的IP
-        ips_per_region = max(1, CONFIG["TOP_IPS_LIMIT"] // len(target_regions))
-        
-        for region in target_regions:
-            if region in region_groups:
-                region_ips = region_groups[region][:ips_per_region]
-                selected_ips.extend(region_ips)
-                print(f"  ✅ {CONFIG['REGION_MAPPING'].get(region, [region])[0]}: 选择 {len(region_ips)} 个IP")
-            else:
-                print(f"  ⚠️ {CONFIG['REGION_MAPPING'].get(region, [region])[0]}: 无可用IP")
-        
-        # 如果选择的IP数量不足，从其他地区补充
-        if len(selected_ips) < CONFIG["TOP_IPS_LIMIT"]:
-            remaining_slots = CONFIG["TOP_IPS_LIMIT"] - len(selected_ips)
-            all_remaining_ips = []
-            
-            for region, ips in region_groups.items():
-                if region not in target_regions:
-                    all_remaining_ips.extend(ips[:region_ips_limit])
-            
-            # 按性能排序并选择
-            all_remaining_ips.sort(key=lambda x: (-x['speed'], x['rtt'], x['loss']))
-            selected_ips.extend(all_remaining_ips[:remaining_slots])
-            
-            if remaining_slots > 0:
-                print(f"  🔧 从其他地区补充 {len(all_remaining_ips[:remaining_slots])} 个IP")
-    else:
-        # 非平衡选择：按性能优先，但确保包含所有目标地区
-        target_region_ips = []
-        other_region_ips = []
-        
-        for ip_data in enhanced_ips:
-            region = ip_data.get('regionCode', 'Unknown')
-            if region in target_regions:
-                target_region_ips.append(ip_data)
-            else:
-                other_region_ips.append(ip_data)
-        
-        # 确保每个目标地区至少有一个代表
-        min_representatives = {}
-        for region in target_regions:
-            region_ips = [ip for ip in target_region_ips if ip.get('regionCode') == region]
-            if region_ips:
-                min_representatives[region] = region_ips[0]  # 每个地区最好的一个
-        
-        # 剩余位置按性能选择
-        remaining_slots = CONFIG["TOP_IPS_LIMIT"] - len(min_representatives)
-        if remaining_slots > 0:
-            # 从所有IP中按性能选择剩余位置
-            all_candidate_ips = target_region_ips + other_region_ips
-            # 移除已经选择的代表IP
-            representative_ips = list(min_representatives.values())
-            candidate_ips = [ip for ip in all_candidate_ips if ip not in representative_ips]
-            
-            candidate_ips.sort(key=lambda x: (-x['speed'], x['rtt'], x['loss']))
-            selected_ips = representative_ips + candidate_ips[:remaining_slots]
-        else:
-            selected_ips = list(min_representatives.values())
-    
-    # 最终按性能排序
-    selected_ips.sort(key=lambda x: (-x['speed'], x['rtt'], x['loss']))
-    
-    print(f"✅ 多地区优选完成: 总共选择 {len(selected_ips)} 个IP")
-    return selected_ips
-
-def get_region_distribution(ip_list):
-    """
-    获取IP列表的地区分布
-    """
-    distribution = {}
-    for ip_data in ip_list:
-        region = ip_data.get('regionCode', 'Unknown')
-        distribution[region] = distribution.get(region, 0) + 1
-    return distribution
-
-####################################################
-# 增强IP信息函数（使用真实地理位置）
-####################################################
-
-def enhance_ip_with_real_region_info(ip_list, worker_region, location_cache=None):
-    """
-    为IP列表添加真实地区信息
-    """
-    enhanced_ips = []
-    
-    for ip_data in ip_list:
-        ip = ip_data[0] if isinstance(ip_data, tuple) else ip_data['ip']
-        rtt = ip_data[1] if isinstance(ip_data, tuple) else ip_data['rtt']
-        loss = ip_data[2] if isinstance(ip_data, tuple) else ip_data['loss']
-        speed = ip_data[3] if isinstance(ip_data, tuple) else ip_data.get('speed', 0)
-        
-        # 尝试使用真实地理位置
-        region_code = 'Unknown'
-        region_name = '🇺🇳 未知'
-        isp = 'Unknown'
-        
-        if location_cache and ip in location_cache:
-            # 使用真实地理位置
-            location_info = location_cache[ip]
-            region_code = location_info['region_code']
-            region_name = location_info['region_name']
-            isp = location_info['isp']
-        else:
-            # 回退到模拟地区检测
-            if worker_region and CONFIG["ENABLE_REGION_MATCHING"]:
-                if random.random() < 0.8:
-                    region_code = worker_region
-                else:
-                    nearby_regions = get_nearby_regions(worker_region)
-                    region_code = random.choice(nearby_regions) if nearby_regions else worker_region
-            else:
-                region_code = random.choice(list(CONFIG["REGION_MAPPING"].keys()))
-            
-            region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])
-            region_name = region_info[0]
-            isp = f"Cloudflare-{region_name}"
-        
-        enhanced_ip = {
-            'ip': ip,
-            'rtt': rtt,
-            'loss': loss,
-            'speed': speed,
-            'regionCode': region_code,
-            'regionName': region_name,
-            'isp': isp,
-            'isRealLocation': (ip in location_cache) if location_cache else False
-        }
-        enhanced_ips.append(enhanced_ip)
-    
-    return enhanced_ips
-
-####################################################
-# 格式化输出函数
-####################################################
-
-def format_ip_with_region(ip_data, port=None):
-    """
-    格式化IP输出为 ip:端口#国旗 地区名称 格式
-    """
-    if port is None:
-        port = int(os.getenv('PORT', 443))
-    
-    region_code = ip_data.get('regionCode', 'Unknown')
-    region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])
-    flag_and_name = region_info[0]
-    
-    # 标记真实地理位置
-    if ip_data.get('isRealLocation', False):
-        return f"{ip_data['ip']}:{port}#{flag_and_name} ✓"
-    else:
-        return f"{ip_data['ip']}:{port}#{flag_and_name}"
-
-def format_ip_list_for_display(ip_list, port=None):
-    """
-    格式化IP列表用于显示
-    """
-    if port is None:
-        port = int(os.getenv('PORT', 443))
-    
-    formatted_ips = []
-    for ip_data in ip_list:
-        formatted_ips.append(format_ip_with_region(ip_data, port))
-    
-    return formatted_ips
-
-def format_ip_list_for_file(ip_list, port=None):
-    """
-    格式化IP列表用于文件保存
-    """
-    if port is None:
-        port = int(os.getenv('PORT', 443))
-    
-    formatted_lines = []
-    for ip_data in ip_list:
-        region_code = ip_data.get('regionCode', 'Unknown')
-        region_info = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])
-        flag_and_name = region_info[0]
-        formatted_lines.append(f"{ip_data['ip']}:{port}#{flag_and_name}")
-    
-    return formatted_lines
-
-####################################################
-# 地区管理功能
-####################################################
-
-def detect_worker_region():
-    """
-    检测Worker地区
-    """
-    try:
-        manual_region = CONFIG["MANUAL_WORKER_REGION"]
-        if manual_region and manual_region.strip():
-            return manual_region.strip().upper()
-        
-        # 模拟检测
-        detected_region = random.choice(['US', 'SG', 'JP', 'HK', 'KR', 'DE'])
-        
-        print(f"📍 检测到Worker地区: {CONFIG['REGION_MAPPING'].get(detected_region, [detected_region])[0]}")
-        return detected_region
-        
-    except Exception as error:
-        print(f"⚠️ 地区检测失败，使用默认地区: {error}")
-        return 'HK'  # 默认香港
-
-def get_nearby_regions(region):
-    """
-    获取邻近地区列表
-    """
-    nearby_map = {
-        'US': ['SG', 'JP', 'HK', 'KR'],
-        'SG': ['JP', 'HK', 'KR', 'US'],
-        'JP': ['SG', 'HK', 'KR', 'US'],
-        'HK': ['SG', 'JP', 'KR', 'US'],
-        'KR': ['JP', 'HK', 'SG', 'US'],
-        'DE': ['NL', 'GB', 'SE', 'FI'],
-        'SE': ['DE', 'NL', 'FI', 'GB'],
-        'NL': ['DE', 'GB', 'SE', 'FI'],
-        'FI': ['SE', 'DE', 'NL', 'GB'],
-        'GB': ['DE', 'NL', 'SE', 'FI']
-    }
-    return nearby_map.get(region, [])
-
-def get_all_regions_by_priority(region):
-    """
-    获取按优先级排序的所有地区
-    """
-    nearby_regions = get_nearby_regions(region)
-    all_regions = ['US', 'SG', 'JP', 'HK', 'KR', 'DE', 'SE', 'NL', 'FI', 'GB']
-    
-    return [region, *nearby_regions, *[r for r in all_regions if r != region and r not in nearby_regions]]
-
-def get_smart_region_selection(worker_region, available_ips):
-    """
-    智能地区选择算法
-    """
-    if not CONFIG["ENABLE_REGION_MATCHING"] or not worker_region:
-        return available_ips
-    
-    priority_regions = get_all_regions_by_priority(worker_region)
-    
-    sorted_ips = []
-    
-    # 按地区优先级排序IP
-    for region in priority_regions:
-        region_ips = [ip for ip in available_ips if ip.get('regionCode') == region]
-        sorted_ips.extend(region_ips)
-    
-    # 添加没有地区信息的IP
-    other_ips = [ip for ip in available_ips if ip.get('regionCode') not in priority_regions and ip.get('regionCode') is not None]
-    sorted_ips.extend(other_ips)
-    
-    return sorted_ips
-
-def check_ip_availability(domain, port=443, timeout=2):
-    """
-    检查IP可用性
-    """
-    try:
-        response = requests.head(
-            f"https://{domain}", 
-            timeout=timeout,
-            headers={'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Checker/1.0)'},
-            verify=False
-        )
-        return response.status_code < 500
-    except Exception as error:
-        print(f"🔧 IP可用性检查失败 {domain}: {error}")
-        return True  # 默认认为可用
-
-def get_best_backup_ip(worker_region=''):
-    """
-    获取最佳备用IP
-    """
-    backup_ips = CONFIG["BACKUP_IPS"]
-    
-    if not backup_ips:
-        return None
-    
-    # 检查IP可用性
-    available_ips = []
-    for ip_info in backup_ips:
-        if check_ip_availability(ip_info['domain'], ip_info['port']):
-            available_ips.append(ip_info)
-    
-    if CONFIG["ENABLE_REGION_MATCHING"] and worker_region:
-        sorted_ips = get_smart_region_selection(worker_region, available_ips)
-        if sorted_ips:
-            return sorted_ips[0]
-    
-    return available_ips[0] if available_ips else None
-
-####################################################
-# 核心功能函数
-####################################################
-
+# 初始化环境变量
 def init_env():
-    """初始化环境"""
+    # 设置环境变量
     for key, value in CONFIG.items():
         os.environ[key] = str(value)
+    
+    # 自动添加URL协议头
     cf_url = os.getenv('CLOUDFLARE_IPS_URL')
     if cf_url and not cf_url.startswith(('http://', 'https://')):
         os.environ['CLOUDFLARE_IPS_URL'] = f"https://{cf_url}"
+    
+    # 禁用TLS警告
     urllib3.disable_warnings()
 
-def fetch_ip_ranges():
-    """获取IP段"""
-    custom_file = os.getenv('CUSTOM_IPS_FILE')
-    if custom_file and os.path.exists(custom_file):
-        print(f"🔧 使用自定义IP池文件: {custom_file}")
-        try:
-            with open(custom_file, 'r') as f:
-                return [line.strip() for line in f.readlines() if line.strip()]
-        except Exception as e:
-            print(f"🚨 读取自定义IP池失败: {e}")
-    url = os.getenv('CLOUDFLARE_IPS_URL')
-    try:
-        res = requests.get(url, timeout=10, verify=False)
-        return res.text.splitlines()
-    except Exception as e:
-        print(f"🚨 获取Cloudflare IP段失败: {e}")
-    return []
+# 获取地区特定的IP段配置
+def get_region_subnets():
+    """返回各地区对应的IP段配置"""
+    region_subnets = {
+        # 香港
+        "HK": [
+            "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+            "104.16.0.0/13", "104.24.0.0/14", "108.162.192.0/18",
+            "131.0.72.0/22", "141.101.64.0/18", "162.158.0.0/15",
+            "172.64.0.0/13", "173.245.48.0/20", "188.114.96.0/20",
+            "190.93.240.0/20", "197.234.240.0/22", "198.41.128.0/17"
+        ],
+        # 台湾
+        "TW": [
+            "104.28.0.0/16", "104.29.0.0/16", "172.68.0.0/16",
+            "104.18.0.0/20", "104.19.0.0/20", "108.162.192.0/18"
+        ],
+        # 新加坡
+        "SG": [
+            "104.16.0.0/13", "104.24.0.0/14", "108.162.192.0/18",
+            "131.0.72.0/22", "141.101.64.0/18", "162.158.0.0/15",
+            "172.64.0.0/13", "173.245.48.0/20", "188.114.96.0/20",
+            "190.93.240.0/20", "197.234.240.0/22", "198.41.128.0/17"
+        ],
+        # 日本
+        "JP": [
+            "104.16.0.0/13", "104.24.0.0/14", "108.162.192.0/18",
+            "131.0.72.0/22", "141.101.64.0/18", "162.158.0.0/15",
+            "172.64.0.0/13", "173.245.48.0/20", "188.114.96.0/20",
+            "190.93.240.0/20", "197.234.240.0/22", "198.41.128.0/17"
+        ],
+        # 美国
+        "US": [
+            "104.16.0.0/12", "108.162.192.0/18", "131.0.72.0/22",
+            "141.101.64.0/18", "162.158.0.0/15", "172.64.0.0/13",
+            "173.245.48.0/20", "188.114.96.0/20", "190.93.240.0/20",
+            "197.234.240.0/22", "198.41.128.0/17"
+        ],
+        # 韩国
+        "KR": [
+            "104.16.0.0/13", "104.24.0.0/14", "108.162.192.0/18",
+            "131.0.72.0/22", "141.101.64.0/18", "162.158.0.0/15",
+            "172.64.0.0/13", "173.245.48.0/20", "188.114.96.0/20",
+            "190.93.240.0/20", "197.234.240.0/22", "198.41.128.0/17"
+        ]
+    }
+    return region_subnets
 
+# 获取用户指定的地区
+def get_target_regions():
+    regions_env = os.getenv('REGIONS', 'HK,TW,SG,JP,US,KR')
+    regions = [r.strip().upper() for r in regions_env.split(',')]
+    valid_regions = []
+    
+    region_subnets = get_region_subnets()
+    for region in regions:
+        if region in region_subnets:
+            valid_regions.append(region)
+        else:
+            print(f"⚠️ 警告: 地区代码 {region} 无效，已跳过")
+    
+    return valid_regions
+
+# 生成随机IP（基于位运算实现）
 def generate_random_ip(subnet):
-    """根据CIDR生成子网内的随机合法IP"""
+    """根据CIDR生成子网内的随机合法IP（排除网络地址和广播地址）"""
     try:
         network = ipaddress.ip_network(subnet, strict=False)
         network_addr = int(network.network_address)
         broadcast_addr = int(network.broadcast_address)
+        
+        # 排除网络地址和广播地址
         first_ip = network_addr + 1
         last_ip = broadcast_addr - 1
+        
+        # 生成随机IP
         random_ip_int = random.randint(first_ip, last_ip)
         return str(ipaddress.IPv4Address(random_ip_int))
     except Exception as e:
         print(f"生成随机IP错误: {e}，使用简单方法生成")
         base_ip = subnet.split('/')[0]
-        parts = base_ip.split('.')
-        while len(parts) < 4:
-            parts.append(str(random.randint(0, 255)))
-        parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
-        return ".".join(parts)
+        return ".".join(base_ip.split('.')[:3] + [str(random.randint(1, 254))])
 
+# 查询IP地理位置（模拟ping0.cc）
+def query_ip_geolocation(ip):
+    """查询IP的地理位置信息"""
+    timeout = float(os.getenv('GEOCHECK_TIMEOUT', 3))
+    
+    try:
+        # 方法1: 使用ping0.cc API
+        api_url = os.getenv('PING0_API')
+        if api_url:
+            response = requests.get(f"{api_url}/{ip}", timeout=timeout, verify=False)
+            if response.status_code == 200:
+                data = response.json()
+                if 'location' in data:
+                    return data['location']
+        
+        # 方法2: 使用ipapi.co（备用）
+        response = requests.get(f"https://ipapi.co/{ip}/json/", timeout=timeout, verify=False)
+        if response.status_code == 200:
+            data = response.json()
+            country = data.get('country_code', '')
+            city = data.get('city', '')
+            if country and city:
+                return f"{country}/{city}"
+            elif country:
+                return country
+        
+        # 方法3: 使用ip-api.com（备用）
+        response = requests.get(f"http://ip-api.com/json/{ip}", timeout=timeout, verify=False)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                country = data.get('countryCode', '')
+                city = data.get('city', '')
+                if country and city:
+                    return f"{country}/{city}"
+                elif country:
+                    return country
+        
+        return "Unknown"
+        
+    except Exception as e:
+        return "Error"
+
+# 检查地区是否匹配
+def check_region_match(location, target_regions):
+    """检查地理位置是否匹配目标地区"""
+    if location == "Unknown" or location == "Error":
+        return False
+    
+    for region in target_regions:
+        if region.upper() in location.upper():
+            return True
+    return False
+
+# 自定义Ping测试（跨平台兼容）
 def custom_ping(ip):
-    """自定义Ping测试"""
     target = urlparse(os.getenv('PING_TARGET')).netloc or os.getenv('PING_TARGET')
     count = int(os.getenv('PING_COUNT'))
     timeout = int(os.getenv('PING_TIMEOUT'))
+    
     try:
-        if os.name == 'nt':
+        # 跨平台ping命令
+        if os.name == 'nt':  # Windows
             cmd = f"ping -n {count} -w {timeout*1000} {target}"
-        else:
+        else:  # Linux/Mac
             cmd = f"ping -c {count} -W {timeout} -I {ip} {target}"
+        
         result = subprocess.run(
-            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout + 2
+            cmd, 
+            shell=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout + 2
         )
+        
+        # 解析ping结果
         output = result.stdout.lower()
+        
         if "100% packet loss" in output or "unreachable" in output:
-            return float('inf'), 100.0
+            return float('inf'), 100.0  # 完全丢包
+        
+        # 提取延迟和丢包率
         loss_line = next((l for l in result.stdout.split('\n') if "packet loss" in l.lower()), "")
         timing_lines = [l for l in result.stdout.split('\n') if "time=" in l.lower()]
+        
+        # 计算丢包率
         loss_percent = 100.0
         if loss_line:
             loss_parts = loss_line.split('%')
@@ -616,6 +234,8 @@ def custom_ping(ip):
                     loss_percent = float(loss_parts[0].split()[-1])
                 except:
                     pass
+        
+        # 计算平均延迟
         delays = []
         for line in timing_lines:
             if "time=" in line:
@@ -625,97 +245,123 @@ def custom_ping(ip):
                 except:
                     continue
         avg_delay = np.mean(delays) if delays else float('inf')
+        
         return avg_delay, loss_percent
+        
     except subprocess.TimeoutExpired:
         return float('inf'), 100.0
     except Exception as e:
         print(f"Ping测试异常: {e}")
         return float('inf'), 100.0
 
+# TCP连接测试（带重试机制）
 def tcp_ping(ip, port, timeout=2):
-    """TCP Ping测试"""
     retry = int(os.getenv('TCP_RETRY', 3))
     success_count = 0
     total_rtt = 0
+    
     for _ in range(retry):
         start = time.time()
         try:
             with socket.create_connection((ip, port), timeout=timeout) as sock:
-                rtt = (time.time() - start) * 1000
+                rtt = (time.time() - start) * 1000  # 毫秒
                 total_rtt += rtt
                 success_count += 1
         except:
             pass
-        time.sleep(0.1)
+        time.sleep(0.1)  # 短暂间隔
+    
     loss_rate = 100 - (success_count / retry * 100)
     avg_rtt = total_rtt / success_count if success_count > 0 else float('inf')
     return avg_rtt, loss_rate
 
+# 测速函数
 def speed_test(ip):
-    """速度测试"""
     url = os.getenv('SPEED_URL')
     timeout = float(os.getenv('SPEED_TIMEOUT', 10))
+    
     try:
+        # 通过指定IP访问
         parsed_url = urlparse(url)
         host = parsed_url.hostname
+        
+        # 创建自定义解析器
+        def resolver(host):
+            return ip
+        
+        # 使用IP直接连接
         start_time = time.time()
         response = requests.get(
-            url, headers={'Host': host}, timeout=timeout, verify=False, stream=True
+            url,
+            headers={'Host': host},
+            timeout=timeout,
+            verify=False,
+            stream=True  # 使用流式下载以准确测量速度
         )
+        
+        # 计算下载速度
         total_bytes = 0
         for chunk in response.iter_content(chunk_size=8192):
             total_bytes += len(chunk)
             if time.time() - start_time > timeout:
                 break
+        
         duration = time.time() - start_time
-        speed_mbps = (total_bytes * 8 / duration) / 1e6 if duration > 0 else 0
+        speed_mbps = (total_bytes * 8) / (duration * 1000000)  # 转换为Mbps
         return speed_mbps
+        
     except Exception as e:
-        print(f"测速异常: {e}")
+        print(f"测速失败 [{ip}]: {e}")
         return 0.0
 
+# IP综合测试 - 第一阶段：Ping测试
 def ping_test(ip):
-    """Ping测试入口"""
-    if os.getenv('MODE') == "PING":
-        rtt, loss = custom_ping(ip)
-    else:
-        rtt, loss = tcp_ping(ip, int(os.getenv('PORT')))
-    return (ip, rtt, loss)
+    mode = os.getenv('MODE', 'PING').upper()
+    
+    if mode == "PING":
+        # 使用自定义Ping测试
+        avg_delay, loss_rate = custom_ping(ip)
+        return (ip, avg_delay, loss_rate)
+    
+    else:  # TCP模式
+        port = int(os.getenv('PORT', 443))
+        avg_rtt, loss_rate = tcp_ping(ip, port, timeout=float(os.getenv('PING_TIMEOUT', 2)))
+        return (ip, avg_rtt, loss_rate)
 
+# IP综合测试 - 第二阶段：测速和地理位置查询
 def full_test(ip_data):
-    """完整测试（Ping + 速度）"""
     ip = ip_data[0]
     speed = speed_test(ip)
-    return (*ip_data, speed)
+    location = query_ip_geolocation(ip)
+    
+    # 验证地区匹配
+    target_regions = get_target_regions()
+    is_matched = check_region_match(location, target_regions)
+    
+    # 在真实地址后面添加✔️符号
+    display_location = f"{location} ✔️" if is_matched else location
+    
+    return (*ip_data, speed, display_location, is_matched)
 
 ####################################################
-# 优化的主逻辑 - 先优选再多地区匹配
+#                      主逻辑                      #
 ####################################################
 if __name__ == "__main__":
     # 0. 初始化环境
     init_env()
     
-    # 1. 打印配置参数
+    # 1. 获取目标地区
+    target_regions = get_target_regions()
+    if not target_regions:
+        print("❌ 没有有效的目标地区，程序终止")
+        exit(1)
+    
+    # 2. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v2.7 (多地区优选版)':^60}")
+    print(f"{'IP网络优化器 v3.0 - 多地区优选':^60}")
     print("="*60)
     print(f"测试模式: {os.getenv('MODE')}")
-    
-    # 检测Worker地区
-    worker_region = detect_worker_region()
-    if CONFIG["MANUAL_WORKER_REGION"]:
-        print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]} (手动指定)")
-    else:
-        print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]} (自动检测)")
-    
-    # 显示目标地区
-    target_regions = CONFIG["TARGET_REGIONS"]
-    print(f"目标地区: {', '.join([CONFIG['REGION_MAPPING'].get(r, [r])[0] for r in target_regions])}")
-    
-    print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
-    print(f"多地区优选: {'启用' if CONFIG['MULTI_REGION_SELECTION'] else '禁用'}")
-    print(f"真实地理位置: {'启用' if CONFIG['ENABLE_REAL_GEO_LOCATION'] else '禁用'}")
-    print(f"优选策略: 先性能优选 → 再多地区匹配")
+    print(f"目标地区: {', '.join(target_regions)}")
     
     if os.getenv('MODE') == "PING":
         print(f"Ping目标: {os.getenv('PING_TARGET')}")
@@ -724,39 +370,46 @@ if __name__ == "__main__":
     else:
         print(f"TCP端口: {os.getenv('PORT')}")
         print(f"TCP重试: {os.getenv('TCP_RETRY')}次")
-        print(f"延迟范围: {os.getenv('RTT_RANGE')}ms")
-        print(f"最大丢包: {os.getenv('LOSS_MAX')}%")
-        print(f"并发线程: {os.getenv('THREADS')}")
-        print(f"IP池大小: {os.getenv('IP_POOL_SIZE')}")
     
+    print(f"延迟范围: {os.getenv('RTT_RANGE')}ms")
+    print(f"最大丢包: {os.getenv('LOSS_MAX')}%")
+    print(f"并发线程: {os.getenv('THREADS')}")
+    print(f"IP池大小: {os.getenv('IP_POOL_SIZE')}")
     print(f"测试IP数: {os.getenv('TEST_IP_COUNT')}")
-    print(f"初次优选数量: {CONFIG['PRE_SELECTION_COUNT']}")
-    print(f"每个地区IP数: {CONFIG['REGION_IPS_LIMIT']}")
+    
+    # 显示自定义IP池信息
     custom_file = os.getenv('CUSTOM_IPS_FILE')
     if custom_file:
         print(f"自定义IP池: {custom_file}")
     else:
         print(f"Cloudflare IP源: {os.getenv('CLOUDFLARE_IPS_URL')}")
+    
     print(f"测速URL: {os.getenv('SPEED_URL')}")
     print("="*60 + "\n")
-
-    # 2. 获取IP段并生成随机IP池
-    subnets = fetch_ip_ranges()
-    if not subnets:
+    
+    # 3. 获取地区特定的IP段
+    region_subnets = get_region_subnets()
+    selected_subnets = []
+    
+    for region in target_regions:
+        if region in region_subnets:
+            selected_subnets.extend(region_subnets[region])
+            print(f"✅ 添加 {region} 地区IP段: {len(region_subnets[region])}个")
+    
+    if not selected_subnets:
         print("❌ 无法获取IP段，程序终止")
         exit(1)
     
-    source_type = "自定义" if custom_file and os.path.exists(custom_file) else "Cloudflare"
-    print(f"✅ 获取到 {len(subnets)} 个{source_type} IP段")
-    
+    # 4. 创建IP池
     ip_pool_size = int(os.getenv('IP_POOL_SIZE'))
     test_ip_count = int(os.getenv('TEST_IP_COUNT'))
-    full_ip_pool = set()
     
-    print(f"🔧 正在生成 {ip_pool_size} 个随机IP的大池...")
+    # 生成完整IP池
+    full_ip_pool = set()
+    print(f"\n🔧 正在生成 {ip_pool_size} 个随机IP的大池...")
     with tqdm(total=ip_pool_size, desc="生成IP大池", unit="IP") as pbar:
         while len(full_ip_pool) < ip_pool_size:
-            subnet = random.choice(subnets)
+            subnet = random.choice(selected_subnets)
             ip = generate_random_ip(subnet)
             if ip not in full_ip_pool:
                 full_ip_pool.add(ip)
@@ -764,20 +417,23 @@ if __name__ == "__main__":
     
     print(f"✅ 成功生成 {len(full_ip_pool)} 个随机IP的大池")
     
+    # 从大池中随机选择测试IP
     if test_ip_count > len(full_ip_pool):
         print(f"⚠️ 警告: 测试IP数量({test_ip_count})大于IP池大小({len(full_ip_pool)})，使用全部IP")
         test_ip_count = len(full_ip_pool)
     
     test_ip_pool = random.sample(list(full_ip_pool), test_ip_count)
     print(f"🔧 从大池中随机选择 {len(test_ip_pool)} 个IP进行测试")
-
-    # 3. 第一阶段：Ping测试（筛选IP）
+    
+    # 5. 第一阶段：Ping测试（筛选IP）
     ping_results = []
     with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in test_ip_pool}
+        
+        # 进度条配置
         with tqdm(
-            total=len(test_ip_pool),
-            desc="🚀 Ping测试进度",
+            total=len(test_ip_pool), 
+            desc="🚀 Ping测试进度", 
             unit="IP",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
         ) as pbar:
@@ -789,15 +445,19 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
     
+    # 筛选通过Ping测试的IP
     rtt_min, rtt_max = map(int, os.getenv('RTT_RANGE').split('~'))
     loss_max = float(os.getenv('LOSS_MAX'))
+    
     passed_ips = [
-        ip_data for ip_data in ping_results
-        if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
+        ip_data for ip_data in ping_results 
+        if rtt_min <= ip_data[1] <= rtt_max
+        and ip_data[2] <= loss_max
     ]
+    
     print(f"\n✅ Ping测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
-
-    # 4. 第二阶段：测速（仅对通过Ping测试的IP）
+    
+    # 6. 第二阶段：测速和地理位置查询（仅对通过Ping测试的IP）
     if not passed_ips:
         print("❌ 没有通过Ping测试的IP，程序终止")
         exit(1)
@@ -805,9 +465,11 @@ if __name__ == "__main__":
     full_results = []
     with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
         future_to_ip = {executor.submit(full_test, ip_data): ip_data for ip_data in passed_ips}
+        
+        # 进度条配置
         with tqdm(
-            total=len(passed_ips),
-            desc="📊 测速进度",
+            total=len(passed_ips), 
+            desc="📊 测速和地理位置查询", 
             unit="IP",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
         ) as pbar:
@@ -818,146 +480,65 @@ if __name__ == "__main__":
                     print(f"\n🔧 测速异常: {e}")
                 finally:
                     pbar.update(1)
-
-    # 5. 初次性能优选（按速度和延迟排序）
-    print(f"\n🔧 正在进行初次性能优选...")
-    pre_selection_count = min(CONFIG["PRE_SELECTION_COUNT"], len(full_results))
     
-    # 按性能排序：速度降序，延迟升序
-    performance_sorted = sorted(
+    # 7. 精选IP排序（按地区匹配优先，然后速度降序，延迟升序）
+    sorted_ips = sorted(
         full_results,
-        key=lambda x: (-x[3], x[1])  # -速度(降序), 延迟(升序)
-    )[:pre_selection_count]
-    
-    print(f"✅ 性能优选完成: 从 {len(full_results)} 个IP中选出 {len(performance_sorted)} 个优质IP")
-
-    # 6. 对优选IP进行真实地理位置查询
-    location_cache = {}
-    if CONFIG["ENABLE_REAL_GEO_LOCATION"]:
-        # 只对优选IP进行地理位置查询
-        pre_selected_ips = [ip_data[0] for ip_data in performance_sorted]
-        location_cache = batch_get_ip_locations(pre_selected_ips, CONFIG["GEO_QUERY_WORKERS"])
-
-    # 7. 使用真实地理位置增强优选IP信息
-    print("🔧 正在为优选IP添加真实地区信息...")
-    enhanced_results = enhance_ip_with_real_region_info(performance_sorted, worker_region, location_cache)
-
-    # 8. 多地区优选（核心功能）
-    if CONFIG["MULTI_REGION_SELECTION"]:
-        final_sorted_ips = multi_region_selection(
-            enhanced_results, 
-            target_regions,
-            CONFIG["REGION_IPS_LIMIT"],
-            CONFIG["BALANCE_REGIONS"]
+        key=lambda x: (
+            0 if x[5] else 1,  # 地区匹配的优先
+            -x[3],  # 速度降序
+            x[1]    # 延迟升序
         )
-    else:
-        # 单地区模式
-        if CONFIG["ENABLE_REGION_MATCHING"] and worker_region:
-            region_sorted_ips = get_smart_region_selection(worker_region, enhanced_results)
-            final_sorted_ips = sorted(
-                region_sorted_ips,
-                key=lambda x: (-x['speed'], x['rtt'], x['loss'])
-            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
-        else:
-            final_sorted_ips = sorted(
-                enhanced_results,
-                key=lambda x: (-x['speed'], x['rtt'])
-            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
-
-    # 9. 保存结果
+    )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
+    
+    # 8. 保存结果
     os.makedirs('results', exist_ok=True)
     
     # 保存所有测试过的IP
     with open('results/all_ips.txt', 'w') as f:
         f.write("\n".join([ip[0] for ip in ping_results]))
     
-    # 保存通过初步筛选的IP
+    # 保存通过Ping测试的IP
     with open('results/passed_ips.txt', 'w') as f:
         f.write("\n".join([ip[0] for ip in passed_ips]))
     
-    # 保存完整结果（CSV格式）
+    # 保存完整结果（带速度和地理位置）
     with open('results/full_results.csv', 'w') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地区代码,地区名称,ISP,真实地理位置\n")
-        for ip_data in enhanced_results:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']},{ip_data.get('isRealLocation', False)}\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地理位置,地区匹配\n")
+        for ip_data in full_results:
+            f.write(f"{ip_data[0]},{ip_data[1]:.2f},{ip_data[2]:.2f},{ip_data[3]:.2f},{ip_data[4]},{ip_data[5]}\n")
     
     # 保存精选IP
-    with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
-        formatted_lines = format_ip_list_for_file(final_sorted_ips)
-        f.write("\n".join(formatted_lines))
+    with open('results/top_ips.txt', 'w') as f:
+        f.write("\n".join([ip[0] for ip in sorted_ips]))
     
-    # 保存精选IP详细信息
-    with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地区代码,地区名称,ISP,真实地理位置\n")
-        for ip_data in final_sorted_ips:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']},{ip_data.get('isRealLocation', False)}\n")
+    # 保存精选IP的完整信息
+    with open('results/top_ips_details.csv', 'w') as f:
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),地理位置,地区匹配\n")
+        for ip_data in sorted_ips:
+            f.write(f"{ip_data[0]},{ip_data[1]:.2f},{ip_data[2]:.2f},{ip_data[3]:.2f},{ip_data[4]},{ip_data[5]}\n")
     
-    # 按地区分组保存
-    region_groups = {}
-    for ip_data in final_sorted_ips:
-        region = ip_data.get('regionCode', 'Unknown')
-        if region not in region_groups:
-            region_groups[region] = []
-        region_groups[region].append(ip_data)
-    
-    for region, ips in region_groups.items():
-        region_name = CONFIG["REGION_MAPPING"].get(region, [region])[0].replace(' ', '_').replace('🇺🇸', 'US').replace('🇸🇬', 'SG').replace('🇯🇵', 'JP').replace('🇭🇰', 'HK')
-        with open(f'results/top_ips_{region_name}.txt', 'w', encoding='utf-8') as f:
-            formatted_lines = format_ip_list_for_file(ips)
-            f.write("\n".join(formatted_lines))
-    
-    # 保存真实地理位置信息
-    if location_cache:
-        with open('results/real_locations.json', 'w', encoding='utf-8') as f:
-            json.dump(location_cache, f, ensure_ascii=False, indent=2)
-
-    # 10. 显示统计结果
+    # 9. 显示统计结果 - 保持原来的输出格式
     print("\n" + "="*60)
     print(f"{'🔥 测试结果统计':^60}")
     print("="*60)
-    
-    real_location_count = sum(1 for ip in enhanced_results if ip.get('isRealLocation', False))
+    print(f"目标地区: {', '.join(target_regions)}")
     print(f"IP池大小: {ip_pool_size}")
     print(f"实际测试IP数: {len(ping_results)}")
     print(f"通过Ping测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(full_results)}")
-    print(f"性能优选IP数: {len(performance_sorted)}")
-    print(f"真实地理位置: {real_location_count}/{len(enhanced_results)}")
-    print(f"最终精选TOP IP: {len(final_sorted_ips)}")
-    print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
-    print(f"多地区优选: {'启用' if CONFIG['MULTI_REGION_SELECTION'] else '禁用'}")
+    print(f"精选TOP IP: {len(sorted_ips)}")
     
-    # 显示地区分布统计
-    region_distribution = get_region_distribution(final_sorted_ips)
-    print(f"\n📊 最终地区分布:")
-    for region, count in region_distribution.items():
-        region_name = CONFIG["REGION_MAPPING"].get(region, [f"未知({region})"])[0]
-        print(f"  {region_name}: {count}个IP")
+    # 统计地区匹配情况
+    matched_ips = [ip for ip in full_results if ip[5]]
+    print(f"地区匹配IP数: {len(matched_ips)}")
     
-    # 显示最佳IP（带真实地理位置标记）
-    if final_sorted_ips:
-        print(f"\n🏆【最佳IP TOP10】(✓表示真实地理位置)")
-        formatted_top_ips = format_ip_list_for_display(final_sorted_ips[:10])
-        for i, formatted_ip in enumerate(formatted_top_ips, 1):
-            print(f"{i}. {formatted_ip}")
-        
-        print(f"\n📋【全部精选IP - 按地区分组】")
-        for region in target_regions:
-            region_ips = [ip for ip in final_sorted_ips if ip.get('regionCode') == region]
-            if region_ips:
-                region_name = CONFIG["REGION_MAPPING"].get(region, [region])[0]
-                print(f"\n📍 {region_name}:")
-                formatted_region_ips = format_ip_list_for_display(region_ips)
-                for i, formatted_ip in enumerate(formatted_region_ips, 1):
-                    print(f"  {i}. {formatted_ip}")
+    if sorted_ips:
+        print(f"\n🏆【最佳IP TOP{min(5, len(sorted_ips))}】")
+        for i, ip_data in enumerate(sorted_ips[:5]):
+            # 保持原来的输出格式，只在真实地址后面添加✔️
+            print(f"{i+1}. {ip_data[0]} | 延迟:{ip_data[1]:.2f}ms | 丢包:{ip_data[2]:.2f}% | 速度:{ip_data[3]:.2f}Mbps | 位置:{ip_data[4]}")
     
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
-    print("📊 文件说明:")
-    print("   - top_ips.txt: 所有精选IP列表")
-    print("   - top_ips_地区名.txt: 按地区分组的IP列表")
-    print("   - top_ips_details.csv: 详细测试数据")
-    print("   - real_locations.json: 真实地理位置数据")
-    print("   - IP后的✓标记表示使用真实地理位置")
-    print("🎯 策略说明:")
-    print("   - 先性能优选 → 真实地理位置查询 → 多地区智能匹配")
+    print("💡 注: 真实地址后面带✔️的表示属于目标地区")
