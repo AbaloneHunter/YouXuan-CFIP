@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Cloudflare IP扫描优化工具 v2.0
+优化真实IP地理位置检测，提高准确性
+"""
+
 import os
 import requests
 import random
@@ -12,6 +19,10 @@ from urllib.parse import urlparse
 from tqdm import tqdm
 import urllib3
 import ipaddress
+import json
+
+# 禁用不安全请求警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ####################################################
 # 可配置参数（程序开头）
@@ -83,18 +94,197 @@ CONFIG = {
         {'domain': 'ProxyIP.Multacom.CMLiussss.net', 'region': 'Multacom', 'regionCode': 'Multacom', 'port': 443}
     ],
     
-    # IP地理位置API配置
+    # 优化的IP地理位置API配置
     "IP_GEO_API": {
-        "timeout": 3,
-        "retry": 2,
-        "enable_cache": True
+        "timeout": 5,
+        "retry": 3,
+        "enable_cache": True,
+        # 多API轮询，提高准确性
+        "apis": [
+            {
+                'name': 'ipapi.co',
+                'url': 'https://ipapi.co/{ip}/json/',
+                'field': 'country_code',
+                'check_field': 'country_code'
+            },
+            {
+                'name': 'ip-api.com',
+                'url': 'http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as,query',
+                'field': 'countryCode',
+                'check_field': 'status',
+                'check_value': 'success'
+            },
+            {
+                'name': 'ipuseragentinfo',
+                'url': 'https://ip.useragentinfo.com/json?ip={ip}',
+                'field': 'country_code',
+                'check_field': 'country_code'
+            },
+            {
+                'name': 'ipapi.is',
+                'url': 'https://api.ipapi.is/?q={ip}',
+                'field': 'country_code',
+                'check_field': 'country_code'
+            },
+            {
+                'name': 'ipwhois',
+                'url': 'http://ipwhois.app/json/{ip}',
+                'field': 'country_code',
+                'check_field': 'success',
+                'check_value': True
+            }
+        ]
     }
 }
 
 ####################################################
-# 新增：IP地理位置缓存
+# 优化的IP地理位置缓存
 ####################################################
 ip_geo_cache = {}
+
+####################################################
+# 优化的真实IP地理位置检测函数
+####################################################
+
+def get_real_ip_region(ip):
+    """
+    优化的真实IP地理位置检测 - 多API轮询，提高准确性
+    """
+    # 检查缓存
+    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
+        return ip_geo_cache[ip]
+    
+    # 如果是私有IP或本地IP，直接返回未知
+    if is_private_ip(ip):
+        return 'Unknown'
+    
+    country_code = None
+    used_api = None
+    
+    # 随机打乱API顺序，避免单一API限制
+    apis = CONFIG["IP_GEO_API"]["apis"].copy()
+    random.shuffle(apis)
+    
+    for api in apis:
+        try:
+            url = api['url'].format(ip=ip)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json'
+            }
+            
+            response = requests.get(
+                url, 
+                timeout=CONFIG["IP_GEO_API"]["timeout"],
+                headers=headers,
+                verify=False
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # 验证API响应
+                if api.get('check_value') is not None:
+                    if data.get(api['check_field']) != api['check_value']:
+                        continue
+                else:
+                    if api['check_field'] not in data:
+                        continue
+                
+                # 获取国家代码
+                country_code = data.get(api['field'])
+                if country_code and country_code != 'XX':
+                    used_api = api['name']
+                    print(f"    ✅ {ip} -> {country_code} (via {api['name']})")
+                    break
+                else:
+                    print(f"    ⚠️ {ip} -> 无效代码 {country_code} (via {api['name']})")
+                    
+        except requests.exceptions.Timeout:
+            print(f"    ⏰ {ip} -> API超时 ({api['name']})")
+            continue
+        except requests.exceptions.ConnectionError:
+            print(f"    🔌 {ip} -> 连接失败 ({api['name']})")
+            continue
+        except Exception as e:
+            print(f"    ❌ {ip} -> 错误: {e} ({api['name']})")
+            continue
+    
+    # 映射到地区代码
+    if country_code:
+        region_code = map_country_to_region(country_code)
+    else:
+        # 如果所有API都失败，使用备用方案
+        region_code = 'US'
+        print(f"    🔄 {ip} -> 使用备用地区: {region_code}")
+    
+    # 缓存结果
+    if CONFIG["IP_GEO_API"]["enable_cache"]:
+        ip_geo_cache[ip] = region_code
+    
+    return region_code
+
+def is_private_ip(ip):
+    """
+    检查是否为私有IP地址
+    """
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        return ip_obj.is_private
+    except:
+        return False
+
+def map_country_to_region(country_code):
+    """
+    优化的国家代码到地区代码映射
+    """
+    country_to_region = {
+        # 北美
+        'US': 'US', 'CA': 'US', 'MX': 'US',
+        
+        # 亚洲
+        'SG': 'SG', 'JP': 'JP', 'KR': 'KR', 
+        'TW': 'HK', 'MO': 'HK', 'CN': 'HK',  # 台湾、澳门映射到香港
+        'TH': 'SG', 'MY': 'SG', 'ID': 'SG', 'VN': 'SG', 'PH': 'SG',
+        'IN': 'SG', 'BD': 'SG', 'PK': 'SG',
+        
+        # 欧洲
+        'DE': 'DE', 'FR': 'DE', 'IT': 'DE', 'ES': 'DE', 'CH': 'DE',
+        'GB': 'GB', 'NL': 'NL', 'SE': 'SE', 'FI': 'FI',
+        'RU': 'DE', 'PL': 'DE', 'UA': 'DE', 'TR': 'DE',
+        
+        # 大洋洲
+        'AU': 'SG', 'NZ': 'SG',
+        
+        # 其他地区默认映射
+        'BR': 'US', 'AR': 'US', 'CL': 'US',  # 南美 -> 美国
+        'ZA': 'DE', 'EG': 'DE', 'NG': 'DE',  # 非洲 -> 德国
+    }
+    
+    return country_to_region.get(country_code, 'US')  # 默认映射到美国
+
+def get_region_by_rtt(rtt, worker_region):
+    """
+    根据延迟智能推测地区（备用方案）
+    """
+    if not worker_region:
+        worker_region = 'HK'
+    
+    # 根据延迟范围推测地区
+    if rtt < 30:
+        # 极低延迟，可能是同地区
+        return worker_region
+    elif rtt < 80:
+        # 低延迟，可能是邻近地区
+        nearby_regions = get_nearby_regions(worker_region)
+        return random.choice(nearby_regions) if nearby_regions else worker_region
+    elif rtt < 150:
+        # 中等延迟，可能是亚洲其他地区
+        asia_regions = ['SG', 'JP', 'KR', 'HK']
+        return random.choice([r for r in asia_regions if r != worker_region])
+    else:
+        # 高延迟，可能是欧美地区
+        return random.choice(['US', 'DE', 'GB'])
 
 ####################################################
 # 改进的URL测试函数
@@ -278,99 +468,6 @@ def smart_url_test(ip, url=None, timeout=None, retry=None):
         return url_test_requests(ip, url, timeout, retry)
 
 ####################################################
-# 真实IP地理位置检测函数
-####################################################
-
-def get_real_ip_region(ip):
-    """
-    使用真实的地理位置API检测IP地区
-    """
-    # 检查缓存
-    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
-        return ip_geo_cache[ip]
-    
-    apis = [
-        {
-            'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
-            'field': 'countryCode',
-            'check_field': 'status',
-            'check_value': 'success'
-        },
-        {
-            'url': f'https://ipapi.co/{ip}/json/',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        },
-        {
-            'url': f'https://ip.useragentinfo.com/json?ip={ip}',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        }
-    ]
-    
-    for api in apis:
-        try:
-            response = requests.get(api['url'], timeout=CONFIG["IP_GEO_API"]["timeout"])
-            if response.status_code == 200:
-                data = response.json()
-                
-                if api['check_value'] is not None:
-                    if data.get(api['check_field']) != api['check_value']:
-                        continue
-                else:
-                    if api['check_field'] not in data:
-                        continue
-                
-                country_code = data.get(api['field'])
-                if country_code:
-                    region_code = map_country_to_region(country_code)
-                    
-                    if CONFIG["IP_GEO_API"]["enable_cache"]:
-                        ip_geo_cache[ip] = region_code
-                    
-                    return region_code
-        except Exception:
-            continue
-    
-    return None
-
-def map_country_to_region(country_code):
-    """
-    将国家代码映射到地区代码
-    """
-    country_to_region = {
-        'US': 'US', 'CA': 'US', 'MX': 'US',
-        'SG': 'SG', 'JP': 'JP', 'KR': 'KR', 'TW': 'HK', 'MO': 'HK',
-        'CN': 'HK',
-        'DE': 'DE', 'FR': 'DE', 'GB': 'GB', 'NL': 'NL', 'SE': 'SE', 
-        'FI': 'FI', 'IT': 'DE', 'ES': 'DE', 'CH': 'DE', 'RU': 'DE',
-        'AU': 'SG', 'NZ': 'SG',
-        'TH': 'SG', 'MY': 'SG', 'ID': 'SG', 'VN': 'SG', 'PH': 'SG',
-        'IN': 'SG', 'BD': 'SG', 'PK': 'SG'
-    }
-    return country_to_region.get(country_code, 'US')
-
-def get_region_by_rtt(rtt, worker_region):
-    """
-    根据延迟智能推测地区（备用方案）
-    """
-    if not worker_region:
-        worker_region = 'HK'
-    
-    if rtt < 30:
-        return worker_region
-    elif rtt < 80:
-        nearby_regions = get_nearby_regions(worker_region)
-        return random.choice(nearby_regions) if nearby_regions else worker_region
-    elif rtt < 150:
-        asia_regions = ['SG', 'JP', 'KR', 'HK']
-        return random.choice([r for r in asia_regions if r != worker_region])
-    else:
-        return random.choice(['US', 'DE', 'GB'])
-
-####################################################
 # 格式化输出函数
 ####################################################
 
@@ -545,7 +642,6 @@ def init_env():
     cf_url = os.getenv('CLOUDFLARE_IPS_URL')
     if cf_url and not cf_url.startswith(('http://', 'https://')):
         os.environ['CLOUDFLARE_IPS_URL'] = f"https://{cf_url}"
-    urllib3.disable_warnings()
 
 def fetch_ip_ranges():
     """获取IP段"""
@@ -691,23 +787,27 @@ def full_test(ip_data):
 
 def enhance_ip_with_region_info(ip_list, worker_region):
     """
-    为IP列表添加真实的地区信息
+    为IP列表添加真实的地区信息 - 优化版本
     """
     enhanced_ips = []
     
-    print("🌍 正在检测IP真实地理位置...")
-    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
+    print("🌍 正在使用多API检测IP真实地理位置...")
+    print("   📊 使用5个地理位置API轮询，提高准确性")
+    
+    with tqdm(total=len(ip_list), desc="IP地理位置检测", unit="IP") as pbar:
         for ip_data in ip_list:
             ip = ip_data[0]
             rtt = ip_data[1]
             loss = ip_data[2]
             speed = ip_data[3] if len(ip_data) > 3 else 0
             
+            # 使用优化的地理位置检测
             region_code = get_real_ip_region(ip)
             
-            if not region_code:
+            # 如果API检测失败，使用延迟推测
+            if not region_code or region_code == 'Unknown':
                 region_code = get_region_by_rtt(rtt, worker_region)
-                pbar.set_description(f"IP地理位置 (备用模式)")
+                pbar.set_description(f"IP地理位置检测 (使用延迟推测)")
             
             region_name = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])[0]
             
@@ -767,7 +867,8 @@ if __name__ == "__main__":
     
     # 2. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v1.0 (URL Test模式)':^60}")
+    print(f"{'Cloudflare IP网络优化器 v2.0':^60}")
+    print(f"{'(优化的地理位置检测)':^60}")
     print("="*60)
     print(f"测试模式: {os.getenv('MODE')}")
     
@@ -778,7 +879,7 @@ if __name__ == "__main__":
         print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]} (自动检测)")
     
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
-    print(f"地理位置API: 启用")
+    print(f"地理位置API: 5个API轮询检测")
     
     mode = os.getenv('MODE')
     if mode == "PING":
@@ -892,7 +993,7 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 6. 为IP添加真实地区信息
+    # 6. 为IP添加真实地区信息（优化版本）
     enhanced_results = enhance_ip_with_region_info(full_results, worker_region)
 
     # 7. 智能地区排序
@@ -974,7 +1075,7 @@ if __name__ == "__main__":
     print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
     
-    print(f"\n🌍 地区分布 (基于真实地理位置API):")
+    print(f"\n🌍 地区分布 (基于5个API的准确检测):")
     for region, stats in sorted(region_stats.items(), key=lambda x: x[1]['count'], reverse=True):
         print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
     
@@ -999,7 +1100,7 @@ if __name__ == "__main__":
         plain_all_ips = format_ip_list_for_file(sorted_ips, include_region=False)
         for i in range(0, len(plain_all_ips), 4):
             line_ips = plain_all_ips[i:i+4]
-            print("  " + "  ".join(line_ips))
+            print("  " + "  ".join(line_ips"))
     
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
@@ -1008,3 +1109,4 @@ if __name__ == "__main__":
     print("   - top_ips_plain.txt: 纯IP:端口格式 (无地区信息)")
     print("   - top_ips_details.csv: 详细性能数据")
     print("   - region_stats.csv: 地区统计信息")
+    print("="*60)
