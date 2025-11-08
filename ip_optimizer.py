@@ -17,13 +17,13 @@ import ipaddress
 CONFIG = {
     "MODE": "TCP",  # 测试模式：PING/TCP
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
-    "PING_COUNT": 5,  # Ping次数
+    "PING_COUNT": 8,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "2~250",  # 延迟范围(ms)
+    "RTT_RANGE": "10~300",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
     "THREADS": 80,  # 并发线程数
-    "IP_POOL_SIZE": 80000,  # IP池总大小
+    "IP_POOL_SIZE": 50000,  # IP池总大小
     "TEST_IP_COUNT": 800,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
@@ -32,9 +32,10 @@ CONFIG = {
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     
-    # 新增：地区配置（从JS版本移植）
+    # 新增：多地区配置
     "ENABLE_REGION_MATCHING": True,  # 启用地区匹配
-    "MANUAL_WORKER_REGION": "HK",  # 手动指定Worker地区
+    "MANUAL_WORKER_REGION": "HK",  # 手动指定Worker地区（单地区）
+    "TARGET_REGIONS": ["HK", "SG", "JP", "KR","US"],  # 新增：目标地区列表（多地区）
     "REGION_MAPPING": {
         'US': ['🇺🇸 美国', 'US', 'United States'],
         'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],
@@ -191,7 +192,136 @@ def get_region_by_rtt(rtt, worker_region):
         return random.choice(['US', 'DE', 'GB'])
 
 ####################################################
-# 格式化输出函数 - 修改为包含ip:端口格式
+# 新增：多地区支持函数
+####################################################
+
+def parse_target_regions():
+    """
+    解析目标地区配置，支持多种输入格式
+    """
+    target_regions = CONFIG["TARGET_REGIONS"]
+    
+    # 如果TARGET_REGIONS是字符串，尝试解析
+    if isinstance(target_regions, str):
+        # 支持逗号分隔：HK,SG,JP
+        if ',' in target_regions:
+            target_regions = [region.strip().upper() for region in target_regions.split(',')]
+        # 支持空格分隔：HK SG JP
+        elif ' ' in target_regions:
+            target_regions = [region.strip().upper() for region in target_regions.split()]
+        # 单个地区
+        else:
+            target_regions = [target_regions.strip().upper()]
+    
+    # 验证地区代码有效性
+    valid_regions = []
+    invalid_regions = []
+    
+    for region in target_regions:
+        if region in CONFIG["REGION_MAPPING"]:
+            valid_regions.append(region)
+        else:
+            invalid_regions.append(region)
+    
+    if invalid_regions:
+        print(f"⚠️ 警告: 以下地区代码无效: {invalid_regions}")
+        print(f"✅ 有效地区代码: {list(CONFIG['REGION_MAPPING'].keys())}")
+    
+    if not valid_regions:
+        print("❌ 没有有效的目标地区，使用默认地区: HK")
+        valid_regions = ['HK']
+    
+    return valid_regions
+
+def filter_ips_by_regions(ip_list, target_regions):
+    """
+    根据目标地区列表过滤IP
+    """
+    if not target_regions or target_regions == ['ALL']:
+        return ip_list
+    
+    filtered_ips = [ip for ip in ip_list if ip.get('regionCode') in target_regions]
+    return filtered_ips
+
+def get_multi_region_selection(ip_list, target_regions):
+    """
+    多地区智能排序算法
+    """
+    if not target_regions or target_regions == ['ALL']:
+        # 如果不指定地区或指定ALL，返回所有地区按质量排序
+        return sorted(ip_list, key=lambda x: (-x['speed'], x['rtt'], x['loss']))
+    
+    # 按目标地区优先级分组
+    region_groups = {}
+    for region in target_regions:
+        region_ips = [ip for ip in ip_list if ip.get('regionCode') == region]
+        # 每个地区内按质量排序
+        region_ips_sorted = sorted(region_ips, key=lambda x: (-x['speed'], x['rtt'], x['loss']))
+        region_groups[region] = region_ips_sorted
+    
+    # 合并结果：每个地区取前N个，然后按质量排序
+    merged_ips = []
+    max_per_region = max(1, len(ip_list) // len(target_regions))
+    
+    for region in target_regions:
+        region_ips = region_groups.get(region, [])
+        # 从每个地区取质量最好的IP
+        merged_ips.extend(region_ips[:max_per_region])
+    
+    # 最终按质量排序
+    return sorted(merged_ips, key=lambda x: (-x['speed'], x['rtt'], x['loss']))
+
+def display_region_statistics(enhanced_results, target_regions):
+    """
+    显示多地区统计信息
+    """
+    region_stats = {}
+    total_ips = len(enhanced_results)
+    
+    for ip_data in enhanced_results:
+        region = ip_data['regionCode']
+        if region not in region_stats:
+            region_stats[region] = {
+                'count': 0,
+                'avg_rtt': 0,
+                'avg_speed': 0,
+                'region_name': ip_data['regionName'],
+                'is_target': region in target_regions
+            }
+        region_stats[region]['count'] += 1
+        region_stats[region]['avg_rtt'] += ip_data['rtt']
+        region_stats[region]['avg_speed'] += ip_data['speed']
+    
+    # 计算平均值
+    for region in region_stats:
+        if region_stats[region]['count'] > 0:
+            region_stats[region]['avg_rtt'] /= region_stats[region]['count']
+            region_stats[region]['avg_speed'] /= region_stats[region]['count']
+    
+    # 按是否目标地区排序
+    target_stats = {k: v for k, v in region_stats.items() if v['is_target']}
+    other_stats = {k: v for k, v in region_stats.items() if not v['is_target']}
+    
+    print(f"\n🌍 多地区统计 (总数: {total_ips}):")
+    
+    if target_stats:
+        print("🎯 目标地区:")
+        for region, stats in sorted(target_stats.items(), key=lambda x: x[1]['count'], reverse=True):
+            percentage = (stats['count'] / total_ips) * 100
+            print(f"  {stats['region_name']}: {stats['count']}个IP ({percentage:.1f}%), "
+                  f"平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
+    
+    if other_stats:
+        print("📊 其他地区:")
+        for region, stats in sorted(other_stats.items(), key=lambda x: x[1]['count'], reverse=True):
+            percentage = (stats['count'] / total_ips) * 100
+            print(f"  {stats['region_name']}: {stats['count']}个IP ({percentage:.1f}%), "
+                  f"平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
+    
+    return region_stats
+
+####################################################
+# 格式化输出函数
 ####################################################
 
 def format_ip_with_region(ip_data, port=None):
@@ -558,9 +688,12 @@ if __name__ == "__main__":
     # 0. 初始化环境
     init_env()
     
-    # 1. 打印配置参数
+    # 1. 解析目标地区配置
+    target_regions = parse_target_regions()
+    
+    # 2. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v2.4 (真实地理位置版)':^60}")
+    print(f"{'IP网络优化器 v2.5 (多地区支持版)':^60}")
     print("="*60)
     print(f"测试模式: {os.getenv('MODE')}")
     
@@ -571,6 +704,7 @@ if __name__ == "__main__":
     else:
         print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]} (自动检测)")
     
+    print(f"目标地区: {', '.join([CONFIG['REGION_MAPPING'].get(r, [r])[0] for r in target_regions])}")
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
     print(f"地理位置API: 启用 (ip-api.com, ipapi.co, ip.useragentinfo.com)")
     
@@ -595,7 +729,7 @@ if __name__ == "__main__":
     print(f"测速URL: {os.getenv('SPEED_URL')}")
     print("="*60 + "\n")
 
-    # 2. 获取IP段并生成随机IP池
+    # 3. 获取IP段并生成随机IP池
     subnets = fetch_ip_ranges()
     if not subnets:
         print("❌ 无法获取IP段，程序终止")
@@ -626,7 +760,7 @@ if __name__ == "__main__":
     test_ip_pool = random.sample(list(full_ip_pool), test_ip_count)
     print(f"🔧 从大池中随机选择 {len(test_ip_pool)} 个IP进行测试")
 
-    # 3. 第一阶段：Ping测试（筛选IP）
+    # 4. 第一阶段：Ping测试（筛选IP）
     ping_results = []
     with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in test_ip_pool}
@@ -652,7 +786,7 @@ if __name__ == "__main__":
     ]
     print(f"\n✅ Ping测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
 
-    # 4. 第二阶段：测速（仅对通过Ping测试的IP）
+    # 5. 第二阶段：测速（仅对通过Ping测试的IP）
     if not passed_ips:
         print("❌ 没有通过Ping测试的IP，程序终止")
         exit(1)
@@ -674,27 +808,24 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 5. 为IP添加真实地区信息
+    # 6. 为IP添加真实地区信息
     enhanced_results = enhance_ip_with_region_info(full_results, worker_region)
 
-    # 6. 智能地区排序
-    if CONFIG["ENABLE_REGION_MATCHING"] and worker_region:
-        print(f"🔧 正在按地区优先级排序...")
-        region_sorted_ips = get_smart_region_selection(worker_region, enhanced_results)
-        
-        # 在地区排序的基础上，再按速度和质量排序
-        sorted_ips = sorted(
-            region_sorted_ips,
-            key=lambda x: (-x['speed'], x['rtt'], x['loss'])
-        )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
-    else:
-        # 传统排序方式（按速度降序，延迟升序）
-        sorted_ips = sorted(
-            enhanced_results,
-            key=lambda x: (-x['speed'], x['rtt'])
-        )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
+    # 7. 多地区智能排序
+    print(f"🔧 正在按多地区优先级排序...")
+    
+    # 首先过滤出目标地区的IP
+    target_region_ips = filter_ips_by_regions(enhanced_results, target_regions)
+    
+    if not target_region_ips:
+        print(f"⚠️ 警告: 在目标地区 {target_regions} 中没有找到符合条件的IP，使用所有地区")
+        target_region_ips = enhanced_results
+    
+    # 使用多地区排序算法
+    sorted_ips = get_multi_region_selection(target_region_ips, target_regions)
+    sorted_ips = sorted_ips[:int(os.getenv('TOP_IPS_LIMIT', 15))]
 
-    # 7. 保存结果 - 新增纯IP:端口格式文件
+    # 8. 保存结果
     os.makedirs('results', exist_ok=True)
     
     # 保存所有测试过的IP
@@ -716,7 +847,7 @@ if __name__ == "__main__":
         formatted_lines = format_ip_list_for_file(sorted_ips, include_region=True)
         f.write("\n".join(formatted_lines))
     
-    # 新增：保存纯IP:端口格式（无地区信息）
+    # 保存纯IP:端口格式（无地区信息）
     with open('results/top_ips_plain.txt', 'w', encoding='utf-8') as f:
         formatted_lines = format_ip_list_for_file(sorted_ips, include_region=False)
         f.write("\n".join(formatted_lines))
@@ -727,71 +858,46 @@ if __name__ == "__main__":
         for ip_data in sorted_ips:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']}\n")
     
-    # 8. 按地区分组统计
-    region_stats = {}
-    for ip_data in enhanced_results:
-        region = ip_data['regionCode']
-        if region not in region_stats:
-            region_stats[region] = {
-                'count': 0,
-                'avg_rtt': 0,
-                'avg_speed': 0,
-                'region_name': ip_data['regionName']
-            }
-        region_stats[region]['count'] += 1
-        region_stats[region]['avg_rtt'] += ip_data['rtt']
-        region_stats[region]['avg_speed'] += ip_data['speed']
-    
-    # 计算平均值
-    for region in region_stats:
-        if region_stats[region]['count'] > 0:
-            region_stats[region]['avg_rtt'] /= region_stats[region]['count']
-            region_stats[region]['avg_speed'] /= region_stats[region]['count']
+    # 9. 多地区统计
+    region_stats = display_region_statistics(enhanced_results, target_regions)
 
-    # 保存地区统计
-    with open('results/region_stats.csv', 'w', encoding='utf-8') as f:
-        f.write("地区代码,地区名称,IP数量,平均延迟(ms),平均速度(Mbps)\n")
-        for region, stats in region_stats.items():
-            f.write(f"{region},{stats['region_name']},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f}\n")
-
-    # 9. 显示统计结果
+    # 10. 显示最终结果
     print("\n" + "="*60)
-    print(f"{'🔥 测试结果统计':^60}")
+    print(f"{'🔥 多地区测试结果统计':^60}")
     print("="*60)
     print(f"IP池大小: {ip_pool_size}")
     print(f"实际测试IP数: {len(ping_results)}")
     print(f"通过Ping测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
+    print(f"目标地区IP数: {len(target_region_ips)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
     print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
-    print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
-    
-    # 显示地区分布
-    print(f"\n🌍 地区分布 (基于真实地理位置API):")
-    for region, stats in sorted(region_stats.items(), key=lambda x: x[1]['count'], reverse=True):
-        print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
+    print(f"目标地区: {', '.join([CONFIG['REGION_MAPPING'].get(r, [r])[0] for r in target_regions])}")
     
     if sorted_ips:
-        # 显示带地区信息的最佳IP
-        print(f"\n🏆【最佳IP TOP10 (带地区信息)】")
-        formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
-        for i, formatted_ip in enumerate(formatted_top_ips, 1):
-            print(f"{i}. {formatted_ip}")
+        # 按地区分组显示最佳IP
+        print(f"\n🏆【最佳IP TOP10 (按地区分组)】")
+        region_groups = {}
+        for ip_data in sorted_ips[:10]:
+            region = ip_data['regionCode']
+            if region not in region_groups:
+                region_groups[region] = []
+            region_groups[region].append(ip_data)
         
-        # 新增：显示纯IP:端口格式
+        for region, ips in region_groups.items():
+            region_name = CONFIG["REGION_MAPPING"].get(region, [f"未知({region})"])[0]
+            print(f"\n{region_name}:")
+            for i, ip_data in enumerate(ips, 1):
+                plain_ip = format_ip_with_port_only(ip_data)
+                formatted_ip = format_ip_with_region(ip_data)
+                print(f"  {i}. {formatted_ip} | 延迟:{ip_data['rtt']:.1f}ms | 速度:{ip_data['speed']:.1f}Mbps")
+        
+        # 显示纯IP:端口格式
         print(f"\n🏆【最佳IP TOP10 (纯IP:端口)】")
         for i, ip_data in enumerate(sorted_ips[:10], 1):
             plain_ip = format_ip_with_port_only(ip_data)
             print(f"{i}. {plain_ip}")
         
-        print(f"\n📋【全部精选IP (带地区信息)】")
-        formatted_all_ips = format_ip_list_for_display(sorted_ips)
-        # 每行显示2个IP（因为包含国旗和中文名称，长度较长）
-        for i in range(0, len(formatted_all_ips), 2):
-            line_ips = formatted_all_ips[i:i+2]
-            print("  " + "  ".join(line_ips))
-        
-        # 新增：显示纯IP:端口格式的全部IP
         print(f"\n📋【全部精选IP (纯IP:端口)】")
         plain_all_ips = format_ip_list_for_file(sorted_ips, include_region=False)
         # 每行显示4个IP（纯IP格式较短）
@@ -805,5 +911,5 @@ if __name__ == "__main__":
     print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 地区名称)")
     print("   - top_ips_plain.txt: 纯IP:端口格式 (无地区信息)")
     print("   - top_ips_details.csv: 详细性能数据")
-    print("   - region_stats.csv: 地区统计信息")
-    print("   - 注意: 地区信息基于真实IP地理位置API，与ping0.cc结果一致")
+    print("   - 注意: 地区信息基于真实IP地理位置API")
+    print(f"🎯 目标地区: {', '.join([CONFIG['REGION_MAPPING'].get(r, [r])[0] for r in target_regions])}")
