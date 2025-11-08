@@ -1100,7 +1100,7 @@ if __name__ == "__main__":
         plain_all_ips = format_ip_list_for_file(sorted_ips, include_region=False)
         for i in range(0, len(plain_all_ips), 4):
             line_ips = plain_all_ips[i:i+4]
-            print("  " + "  ".join(line_ips"))
+            print("  " + "  ".join(line_ips))
     
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
