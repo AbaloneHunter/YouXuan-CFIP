@@ -24,7 +24,7 @@ CONFIG = {
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
     "THREADS": 200,  # 并发线程数
     "IP_POOL_SIZE": 20000,  # IP池总大小
-    "TEST_IP_COUNT": 500,  # 实际测试IP数量
+    "TEST_IP_COUNT": 1000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
