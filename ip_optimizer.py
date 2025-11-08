@@ -15,8 +15,11 @@ import ipaddress
 # 可配置参数（程序开头）
 ####################################################
 CONFIG = {
-    "MODE": "TCP",  # 测试模式：PING/TCP
+    "MODE": "URL_TEST",  # 测试模式：PING/TCP/URL_TEST
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
+    "URL_TEST_TARGET": "https://www.gstatic.com/generate_204",  # URL测试目标
+    "URL_TEST_TIMEOUT": 5,  # URL测试超时(秒)
+    "URL_TEST_RETRY": 2,  # URL测试重试次数
     "PING_COUNT": 5,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
@@ -189,6 +192,86 @@ def get_region_by_rtt(rtt, worker_region):
     else:
         # 高延迟，可能是欧美地区
         return random.choice(['US', 'DE', 'GB'])
+
+####################################################
+# 新增：URL Test模式延迟检测函数
+####################################################
+
+def url_test(ip, url=None, timeout=None, retry=None):
+    """
+    URL Test模式延迟检测
+    通过HTTP请求测试IP的延迟和可用性
+    """
+    if url is None:
+        url = CONFIG["URL_TEST_TARGET"]
+    if timeout is None:
+        timeout = CONFIG["URL_TEST_TIMEOUT"]
+    if retry is None:
+        retry = CONFIG["URL_TEST_RETRY"]
+    
+    success_count = 0
+    total_rtt = 0
+    delays = []
+    
+    for attempt in range(retry):
+        try:
+            start_time = time.time()
+            
+            # 设置自定义Host头，直接使用IP访问
+            parsed_url = urlparse(url)
+            headers = {
+                'Host': parsed_url.hostname,
+                'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)'
+            }
+            
+            # 构建直接使用IP的URL
+            if parsed_url.port:
+                actual_url = f"{parsed_url.scheme}://{ip}:{parsed_url.port}{parsed_url.path}"
+            else:
+                actual_url = f"{parsed_url.scheme}://{ip}{parsed_url.path}"
+            
+            response = requests.get(
+                actual_url,
+                headers=headers,
+                timeout=timeout,
+                verify=False,
+                allow_redirects=False
+            )
+            
+            rtt = (time.time() - start_time) * 1000  # 转换为毫秒
+            
+            # 检查响应状态码，204是generate_204的特殊情况
+            if response.status_code in [200, 204, 301, 302, 307, 308]:
+                success_count += 1
+                total_rtt += rtt
+                delays.append(rtt)
+            
+        except requests.exceptions.Timeout:
+            # 超时不算成功
+            continue
+        except requests.exceptions.ConnectionError:
+            # 连接错误
+            continue
+        except requests.exceptions.RequestException as e:
+            # 其他请求异常
+            continue
+        except Exception as e:
+            # 其他异常
+            continue
+        
+        # 短暂间隔避免过于频繁
+        if attempt < retry - 1:
+            time.sleep(0.1)
+    
+    # 计算平均延迟和丢包率
+    if success_count > 0:
+        avg_rtt = total_rtt / success_count
+        loss_rate = ((retry - success_count) / retry) * 100
+    else:
+        avg_rtt = float('inf')
+        loss_rate = 100.0
+    
+    return avg_rtt, loss_rate, delays
 
 ####################################################
 # 格式化输出函数 - 修改为包含ip:端口格式
@@ -500,15 +583,23 @@ def speed_test(ip):
         return 0.0
 
 def ping_test(ip):
-    """Ping测试入口"""
-    if os.getenv('MODE') == "PING":
+    """延迟测试入口 - 支持三种模式"""
+    mode = os.getenv('MODE')
+    
+    if mode == "PING":
         rtt, loss = custom_ping(ip)
-    else:
+    elif mode == "TCP":
         rtt, loss = tcp_ping(ip, int(os.getenv('PORT')))
+    elif mode == "URL_TEST":
+        rtt, loss, _ = url_test(ip)
+    else:
+        # 默认使用TCP模式
+        rtt, loss = tcp_ping(ip, int(os.getenv('PORT')))
+    
     return (ip, rtt, loss)
 
 def full_test(ip_data):
-    """完整测试（Ping + 速度）"""
+    """完整测试（延迟 + 速度）"""
     ip = ip_data[0]
     speed = speed_test(ip)
     return (*ip_data, speed)
@@ -560,7 +651,7 @@ if __name__ == "__main__":
     
     # 1. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v1.0 (真实地理位置版)':^60}")
+    print(f"{'IP网络优化器 v1.0 (URL Test模式)':^60}")
     print("="*60)
     print(f"测试模式: {os.getenv('MODE')}")
     
@@ -574,18 +665,23 @@ if __name__ == "__main__":
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
     print(f"地理位置API: 启用 (ip-api.com, ipapi.co, ip.useragentinfo.com)")
     
-    if os.getenv('MODE') == "PING":
+    mode = os.getenv('MODE')
+    if mode == "PING":
         print(f"Ping目标: {os.getenv('PING_TARGET')}")
         print(f"Ping次数: {os.getenv('PING_COUNT')}")
         print(f"Ping超时: {os.getenv('PING_TIMEOUT')}秒")
-    else:
+    elif mode == "TCP":
         print(f"TCP端口: {os.getenv('PORT')}")
         print(f"TCP重试: {os.getenv('TCP_RETRY')}次")
-        print(f"延迟范围: {os.getenv('RTT_RANGE')}ms")
-        print(f"最大丢包: {os.getenv('LOSS_MAX')}%")
-        print(f"并发线程: {os.getenv('THREADS')}")
-        print(f"IP池大小: {os.getenv('IP_POOL_SIZE')}")
+    elif mode == "URL_TEST":
+        print(f"URL测试目标: {os.getenv('URL_TEST_TARGET')}")
+        print(f"URL测试超时: {os.getenv('URL_TEST_TIMEOUT')}秒")
+        print(f"URL测试重试: {os.getenv('URL_TEST_RETRY')}次")
     
+    print(f"延迟范围: {os.getenv('RTT_RANGE')}ms")
+    print(f"最大丢包: {os.getenv('LOSS_MAX')}%")
+    print(f"并发线程: {os.getenv('THREADS')}")
+    print(f"IP池大小: {os.getenv('IP_POOL_SIZE')}")
     print(f"测试IP数: {os.getenv('TEST_IP_COUNT')}")
     custom_file = os.getenv('CUSTOM_IPS_FILE')
     if custom_file:
@@ -626,13 +722,20 @@ if __name__ == "__main__":
     test_ip_pool = random.sample(list(full_ip_pool), test_ip_count)
     print(f"🔧 从大池中随机选择 {len(test_ip_pool)} 个IP进行测试")
 
-    # 3. 第一阶段：Ping测试（筛选IP）
+    # 3. 第一阶段：延迟测试（筛选IP）
     ping_results = []
+    mode_display = {
+        "PING": "🚀 Ping测试进度",
+        "TCP": "🔌 TCP测试进度", 
+        "URL_TEST": "🌐 URL测试进度"
+    }
+    progress_desc = mode_display.get(mode, "🚀 延迟测试进度")
+    
     with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in test_ip_pool}
         with tqdm(
             total=len(test_ip_pool),
-            desc="🚀 Ping测试进度",
+            desc=progress_desc,
             unit="IP",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
         ) as pbar:
@@ -640,7 +743,7 @@ if __name__ == "__main__":
                 try:
                     ping_results.append(future.result())
                 except Exception as e:
-                    print(f"\n🔧 Ping测试异常: {e}")
+                    print(f"\n🔧 延迟测试异常: {e}")
                 finally:
                     pbar.update(1)
     
@@ -650,11 +753,11 @@ if __name__ == "__main__":
         ip_data for ip_data in ping_results
         if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
     ]
-    print(f"\n✅ Ping测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
+    print(f"\n✅ 延迟测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
 
-    # 4. 第二阶段：测速（仅对通过Ping测试的IP）
+    # 4. 第二阶段：测速（仅对通过延迟测试的IP）
     if not passed_ips:
-        print("❌ 没有通过Ping测试的IP，程序终止")
+        print("❌ 没有通过延迟测试的IP，程序终止")
         exit(1)
     
     full_results = []
@@ -760,7 +863,7 @@ if __name__ == "__main__":
     print("="*60)
     print(f"IP池大小: {ip_pool_size}")
     print(f"实际测试IP数: {len(ping_results)}")
-    print(f"通过Ping测试IP数: {len(passed_ips)}")
+    print(f"通过延迟测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
     print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
