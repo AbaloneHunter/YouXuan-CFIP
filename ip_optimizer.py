@@ -12,19 +12,19 @@ import urllib3
 import ipaddress
 
 ####################################################
-# 可配置参数（程序开头）- 修改为默认TCP模式
+# 可配置参数（程序开头）
 ####################################################
 CONFIG = {
-    "MODE": "TCP",  # 默认使用TCP模式测速
+    "MODE": "TCP",  # 测试模式：PING/TCP
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
     "PING_COUNT": 8,  # Ping次数
     "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "10~300",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
-    "THREADS": 80,  # 并发线程数
+    "THREADS": 200,  # 并发线程数
     "IP_POOL_SIZE": 500000,  # IP池总大小
-    "TEST_IP_COUNT": 5000,  # 实际测试IP数量
+    "TEST_IP_COUNT": 10000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
@@ -250,7 +250,7 @@ def format_ip_list_for_file(ip_list, port=None, include_region=True):
     return formatted_lines
 
 ####################################################
-# 从JS版本移植的地区管理功能
+# 地区管理功能
 ####################################################
 
 def detect_worker_region():
@@ -560,9 +560,9 @@ if __name__ == "__main__":
     
     # 1. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v2.4 (TCP模式测速)':^60}")
+    print(f"{'IP网络优化器 v1.0 (真实地理位置版)':^60}")
     print("="*60)
-    print(f"测试模式: {os.getenv('MODE')} (默认TCP模式)")
+    print(f"测试模式: {os.getenv('MODE')}")
     
     # 检测Worker地区
     worker_region = detect_worker_region()
@@ -626,13 +626,13 @@ if __name__ == "__main__":
     test_ip_pool = random.sample(list(full_ip_pool), test_ip_count)
     print(f"🔧 从大池中随机选择 {len(test_ip_pool)} 个IP进行测试")
 
-    # 3. 第一阶段：TCP Ping测试（筛选IP）
+    # 3. 第一阶段：Ping测试（筛选IP）
     ping_results = []
     with ThreadPoolExecutor(max_workers=int(os.getenv('THREADS'))) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in test_ip_pool}
         with tqdm(
             total=len(test_ip_pool),
-            desc="🚀 TCP Ping测试进度",
+            desc="🚀 Ping测试进度",
             unit="IP",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
         ) as pbar:
@@ -640,7 +640,7 @@ if __name__ == "__main__":
                 try:
                     ping_results.append(future.result())
                 except Exception as e:
-                    print(f"\n🔧 TCP Ping测试异常: {e}")
+                    print(f"\n🔧 Ping测试异常: {e}")
                 finally:
                     pbar.update(1)
     
@@ -650,11 +650,11 @@ if __name__ == "__main__":
         ip_data for ip_data in ping_results
         if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
     ]
-    print(f"\n✅ TCP Ping测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
+    print(f"\n✅ Ping测试完成: 总数 {len(ping_results)}, 通过 {len(passed_ips)}")
 
-    # 4. 第二阶段：测速（仅对通过TCP Ping测试的IP）
+    # 4. 第二阶段：测速（仅对通过Ping测试的IP）
     if not passed_ips:
-        print("❌ 没有通过TCP Ping测试的IP，程序终止")
+        print("❌ 没有通过Ping测试的IP，程序终止")
         exit(1)
     
     full_results = []
@@ -756,11 +756,11 @@ if __name__ == "__main__":
 
     # 9. 显示统计结果
     print("\n" + "="*60)
-    print(f"{'🔥 TCP模式测速结果统计':^60}")
+    print(f"{'🔥 测试结果统计':^60}")
     print("="*60)
     print(f"IP池大小: {ip_pool_size}")
     print(f"实际测试IP数: {len(ping_results)}")
-    print(f"通过TCP Ping测试IP数: {len(passed_ips)}")
+    print(f"通过Ping测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
     print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
