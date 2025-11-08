@@ -33,9 +33,10 @@ CONFIG = {
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     
-    # 地区配置
+    # 地区配置 - 新增多地区支持
     "ENABLE_REGION_MATCHING": True,  # 启用地区匹配
-    "MANUAL_WORKER_REGION": "SG",  # 手动指定Worker地区
+    "MANUAL_WORKER_REGION": "SG",  # 手动指定Worker地区（主地区）
+    "TARGET_REGIONS": ["SG", "JP", "HK", "US"],  # 目标地区列表（支持多地区优选）
     "REGION_MAPPING": {
         'US': ['🇺🇸 美国', 'US', 'United States'],
         'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],
@@ -95,9 +96,14 @@ CONFIG = {
         }
     ],
     
-    # 新增：优选后再进行地区匹配的配置
+    # 优选配置
     "PRE_SELECTION_COUNT": 200,  # 初次优选IP数量（用于地理位置查询）
     "GEO_QUERY_WORKERS": 20,  # 地理位置查询并发数
+    
+    # 多地区优选配置 - 新增
+    "MULTI_REGION_SELECTION": True,  # 启用多地区优选
+    "REGION_IPS_LIMIT": 15,  # 每个地区最多选择的IP数量
+    "BALANCE_REGIONS": True,  # 是否平衡各地区IP数量
 }
 
 ####################################################
@@ -210,6 +216,113 @@ def batch_get_ip_locations(ip_list, max_workers=10):
     
     print(f"✅ 地理位置查询完成: 成功 {len(location_cache)}/{len(ip_list)}")
     return location_cache
+
+####################################################
+# 多地区优选功能 - 新增
+####################################################
+
+def multi_region_selection(enhanced_ips, target_regions, region_ips_limit=15, balance_regions=True):
+    """
+    多地区优选算法
+    """
+    if not CONFIG["MULTI_REGION_SELECTION"]:
+        # 如果不启用多地区优选，返回原始排序
+        return enhanced_ips[:CONFIG["TOP_IPS_LIMIT"]]
+    
+    print(f"🌍 正在进行多地区优选，目标地区: {', '.join(target_regions)}")
+    
+    # 按地区分组
+    region_groups = {}
+    for ip_data in enhanced_ips:
+        region = ip_data.get('regionCode', 'Unknown')
+        if region not in region_groups:
+            region_groups[region] = []
+        region_groups[region].append(ip_data)
+    
+    # 对每个地区的IP按性能排序
+    for region in region_groups:
+        region_groups[region] = sorted(
+            region_groups[region],
+            key=lambda x: (-x['speed'], x['rtt'], x['loss'])
+        )
+    
+    selected_ips = []
+    
+    if balance_regions:
+        # 平衡选择：每个地区选择相同数量的IP
+        ips_per_region = max(1, CONFIG["TOP_IPS_LIMIT"] // len(target_regions))
+        
+        for region in target_regions:
+            if region in region_groups:
+                region_ips = region_groups[region][:ips_per_region]
+                selected_ips.extend(region_ips)
+                print(f"  ✅ {CONFIG['REGION_MAPPING'].get(region, [region])[0]}: 选择 {len(region_ips)} 个IP")
+            else:
+                print(f"  ⚠️ {CONFIG['REGION_MAPPING'].get(region, [region])[0]}: 无可用IP")
+        
+        # 如果选择的IP数量不足，从其他地区补充
+        if len(selected_ips) < CONFIG["TOP_IPS_LIMIT"]:
+            remaining_slots = CONFIG["TOP_IPS_LIMIT"] - len(selected_ips)
+            all_remaining_ips = []
+            
+            for region, ips in region_groups.items():
+                if region not in target_regions:
+                    all_remaining_ips.extend(ips[:region_ips_limit])
+            
+            # 按性能排序并选择
+            all_remaining_ips.sort(key=lambda x: (-x['speed'], x['rtt'], x['loss']))
+            selected_ips.extend(all_remaining_ips[:remaining_slots])
+            
+            if remaining_slots > 0:
+                print(f"  🔧 从其他地区补充 {len(all_remaining_ips[:remaining_slots])} 个IP")
+    else:
+        # 非平衡选择：按性能优先，但确保包含所有目标地区
+        target_region_ips = []
+        other_region_ips = []
+        
+        for ip_data in enhanced_ips:
+            region = ip_data.get('regionCode', 'Unknown')
+            if region in target_regions:
+                target_region_ips.append(ip_data)
+            else:
+                other_region_ips.append(ip_data)
+        
+        # 确保每个目标地区至少有一个代表
+        min_representatives = {}
+        for region in target_regions:
+            region_ips = [ip for ip in target_region_ips if ip.get('regionCode') == region]
+            if region_ips:
+                min_representatives[region] = region_ips[0]  # 每个地区最好的一个
+        
+        # 剩余位置按性能选择
+        remaining_slots = CONFIG["TOP_IPS_LIMIT"] - len(min_representatives)
+        if remaining_slots > 0:
+            # 从所有IP中按性能选择剩余位置
+            all_candidate_ips = target_region_ips + other_region_ips
+            # 移除已经选择的代表IP
+            representative_ips = list(min_representatives.values())
+            candidate_ips = [ip for ip in all_candidate_ips if ip not in representative_ips]
+            
+            candidate_ips.sort(key=lambda x: (-x['speed'], x['rtt'], x['loss']))
+            selected_ips = representative_ips + candidate_ips[:remaining_slots]
+        else:
+            selected_ips = list(min_representatives.values())
+    
+    # 最终按性能排序
+    selected_ips.sort(key=lambda x: (-x['speed'], x['rtt'], x['loss']))
+    
+    print(f"✅ 多地区优选完成: 总共选择 {len(selected_ips)} 个IP")
+    return selected_ips
+
+def get_region_distribution(ip_list):
+    """
+    获取IP列表的地区分布
+    """
+    distribution = {}
+    for ip_data in ip_list:
+        region = ip_data.get('regionCode', 'Unknown')
+        distribution[region] = distribution.get(region, 0) + 1
+    return distribution
 
 ####################################################
 # 增强IP信息函数（使用真实地理位置）
@@ -576,7 +689,7 @@ def full_test(ip_data):
     return (*ip_data, speed)
 
 ####################################################
-# 优化的主逻辑 - 先优选再地区匹配
+# 优化的主逻辑 - 先优选再多地区匹配
 ####################################################
 if __name__ == "__main__":
     # 0. 初始化环境
@@ -584,7 +697,7 @@ if __name__ == "__main__":
     
     # 1. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v2.6 (先优选再地区匹配)':^60}")
+    print(f"{'IP网络优化器 v2.7 (多地区优选版)':^60}")
     print("="*60)
     print(f"测试模式: {os.getenv('MODE')}")
     
@@ -595,9 +708,14 @@ if __name__ == "__main__":
     else:
         print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]} (自动检测)")
     
+    # 显示目标地区
+    target_regions = CONFIG["TARGET_REGIONS"]
+    print(f"目标地区: {', '.join([CONFIG['REGION_MAPPING'].get(r, [r])[0] for r in target_regions])}")
+    
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
+    print(f"多地区优选: {'启用' if CONFIG['MULTI_REGION_SELECTION'] else '禁用'}")
     print(f"真实地理位置: {'启用' if CONFIG['ENABLE_REAL_GEO_LOCATION'] else '禁用'}")
-    print(f"优选策略: 先性能优选，再地区匹配")
+    print(f"优选策略: 先性能优选 → 再多地区匹配")
     
     if os.getenv('MODE') == "PING":
         print(f"Ping目标: {os.getenv('PING_TARGET')}")
@@ -613,6 +731,7 @@ if __name__ == "__main__":
     
     print(f"测试IP数: {os.getenv('TEST_IP_COUNT')}")
     print(f"初次优选数量: {CONFIG['PRE_SELECTION_COUNT']}")
+    print(f"每个地区IP数: {CONFIG['REGION_IPS_LIMIT']}")
     custom_file = os.getenv('CUSTOM_IPS_FILE')
     if custom_file:
         print(f"自定义IP池: {custom_file}")
@@ -723,22 +842,27 @@ if __name__ == "__main__":
     print("🔧 正在为优选IP添加真实地区信息...")
     enhanced_results = enhance_ip_with_real_region_info(performance_sorted, worker_region, location_cache)
 
-    # 8. 智能地区排序（在性能优选的基础上）
-    if CONFIG["ENABLE_REGION_MATCHING"] and worker_region:
-        print(f"🔧 正在按地区优先级进行智能排序...")
-        region_sorted_ips = get_smart_region_selection(worker_region, enhanced_results)
-        
-        # 最终排序：在地区优先级基础上，再按性能排序
-        final_sorted_ips = sorted(
-            region_sorted_ips,
-            key=lambda x: (-x['speed'], x['rtt'], x['loss'])
-        )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
+    # 8. 多地区优选（核心功能）
+    if CONFIG["MULTI_REGION_SELECTION"]:
+        final_sorted_ips = multi_region_selection(
+            enhanced_results, 
+            target_regions,
+            CONFIG["REGION_IPS_LIMIT"],
+            CONFIG["BALANCE_REGIONS"]
+        )
     else:
-        # 传统排序方式（按性能）
-        final_sorted_ips = sorted(
-            enhanced_results,
-            key=lambda x: (-x['speed'], x['rtt'])
-        )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
+        # 单地区模式
+        if CONFIG["ENABLE_REGION_MATCHING"] and worker_region:
+            region_sorted_ips = get_smart_region_selection(worker_region, enhanced_results)
+            final_sorted_ips = sorted(
+                region_sorted_ips,
+                key=lambda x: (-x['speed'], x['rtt'], x['loss'])
+            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
+        else:
+            final_sorted_ips = sorted(
+                enhanced_results,
+                key=lambda x: (-x['speed'], x['rtt'])
+            )[:int(os.getenv('TOP_IPS_LIMIT', 15))]
 
     # 9. 保存结果
     os.makedirs('results', exist_ok=True)
@@ -768,6 +892,20 @@ if __name__ == "__main__":
         for ip_data in final_sorted_ips:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['regionCode']},{ip_data['regionName']},{ip_data['isp']},{ip_data.get('isRealLocation', False)}\n")
     
+    # 按地区分组保存
+    region_groups = {}
+    for ip_data in final_sorted_ips:
+        region = ip_data.get('regionCode', 'Unknown')
+        if region not in region_groups:
+            region_groups[region] = []
+        region_groups[region].append(ip_data)
+    
+    for region, ips in region_groups.items():
+        region_name = CONFIG["REGION_MAPPING"].get(region, [region])[0].replace(' ', '_').replace('🇺🇸', 'US').replace('🇸🇬', 'SG').replace('🇯🇵', 'JP').replace('🇭🇰', 'HK')
+        with open(f'results/top_ips_{region_name}.txt', 'w', encoding='utf-8') as f:
+            formatted_lines = format_ip_list_for_file(ips)
+            f.write("\n".join(formatted_lines))
+    
     # 保存真实地理位置信息
     if location_cache:
         with open('results/real_locations.json', 'w', encoding='utf-8') as f:
@@ -787,19 +925,14 @@ if __name__ == "__main__":
     print(f"真实地理位置: {real_location_count}/{len(enhanced_results)}")
     print(f"最终精选TOP IP: {len(final_sorted_ips)}")
     print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]}")
-    print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
+    print(f"多地区优选: {'启用' if CONFIG['MULTI_REGION_SELECTION'] else '禁用'}")
     
     # 显示地区分布统计
-    if CONFIG["ENABLE_REGION_MATCHING"]:
-        region_stats = {}
-        for ip_data in final_sorted_ips:
-            region = ip_data.get('regionCode', 'Unknown')
-            region_stats[region] = region_stats.get(region, 0) + 1
-        
-        print(f"\n📊 地区分布:")
-        for region, count in region_stats.items():
-            region_name = CONFIG["REGION_MAPPING"].get(region, [f"未知({region})"])[0]
-            print(f"  {region_name}: {count}个")
+    region_distribution = get_region_distribution(final_sorted_ips)
+    print(f"\n📊 最终地区分布:")
+    for region, count in region_distribution.items():
+        region_name = CONFIG["REGION_MAPPING"].get(region, [f"未知({region})"])[0]
+        print(f"  {region_name}: {count}个IP")
     
     # 显示最佳IP（带真实地理位置标记）
     if final_sorted_ips:
@@ -808,19 +941,23 @@ if __name__ == "__main__":
         for i, formatted_ip in enumerate(formatted_top_ips, 1):
             print(f"{i}. {formatted_ip}")
         
-        print(f"\n📋【全部精选IP】")
-        formatted_all_ips = format_ip_list_for_display(final_sorted_ips)
-        # 每行显示2个IP（因为包含国旗和中文名称，长度较长）
-        for i in range(0, len(formatted_all_ips), 2):
-            line_ips = formatted_all_ips[i:i+2]
-            print("  " + "  ".join(line_ips))
+        print(f"\n📋【全部精选IP - 按地区分组】")
+        for region in target_regions:
+            region_ips = [ip for ip in final_sorted_ips if ip.get('regionCode') == region]
+            if region_ips:
+                region_name = CONFIG["REGION_MAPPING"].get(region, [region])[0]
+                print(f"\n📍 {region_name}:")
+                formatted_region_ips = format_ip_list_for_display(region_ips)
+                for i, formatted_ip in enumerate(formatted_region_ips, 1):
+                    print(f"  {i}. {formatted_ip}")
     
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
     print("📊 文件说明:")
-    print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 地区名称)")
+    print("   - top_ips.txt: 所有精选IP列表")
+    print("   - top_ips_地区名.txt: 按地区分组的IP列表")
     print("   - top_ips_details.csv: 详细测试数据")
     print("   - real_locations.json: 真实地理位置数据")
     print("   - IP后的✓标记表示使用真实地理位置")
     print("🎯 策略说明:")
-    print("   - 先性能优选 → 再地区匹配 → 最终智能排序")
+    print("   - 先性能优选 → 真实地理位置查询 → 多地区智能匹配")
