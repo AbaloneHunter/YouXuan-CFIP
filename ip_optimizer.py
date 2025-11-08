@@ -1,4 +1,3 @@
-
 import os
 import requests
 import random
@@ -12,43 +11,29 @@ from tqdm import tqdm
 import urllib3
 import ipaddress
 
-
 ####################################################
 # 配置参数
 ####################################################
 CONFIG = {
     # 测试模式配置
-    "MODE": "URL_TEST",    # 测试模式：PING/TCP/URL_TEST
-    "URL_TEST_TARGET": 
-    "http://www.gstatic.com/generate_204",  # URL测试目标地址
-    "URL_TEST_TIMEOUT": 3,                  # URL测试超时时间（秒）
-    "URL_TEST_RETRY": 2,   # URL测试重试次数
+    "MODE": "URL_TEST",                           # 测试模式：PING/TCP/URL_TEST
+    "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标地址
+    "URL_TEST_TIMEOUT": 3,                        # URL测试超时时间（秒）
+    "URL_TEST_RETRY": 2,                          # URL测试重试次数
     
     # 网络连接配置
-    "PORT": 443,           # TCP测试端口号
-    "RTT_RANGE": "0~300",  # 可接受的延迟范围（毫秒）
-    "LOSS_MAX": 2.0,       # 最大丢包率（百分比）
+    "PORT": 443,                                  # TCP测试端口号
+    "RTT_RANGE": "0~300",                         # 可接受的延迟范围（毫秒）
+    "LOSS_MAX": 2.0,                              # 最大丢包率（百分比）
     
     # 性能与资源配置
-    "THREADS": 200,        # 并发线程数量
-    "IP_POOL_SIZE": 50000, # IP池总大小（生成的IP数量）
-    "TEST_IP_COUNT": 1000, # 实际测试的IP数量
-    "TOP_IPS_LIMIT": 50,   # 最终精选的IP数量
+    "THREADS": 200,                               # 并发线程数量
+    "IP_POOL_SIZE": 50000,                        # IP池总大小（生成的IP数量）
+    "TEST_IP_COUNT": 1000,                        # 实际测试的IP数量
+    "TOP_IPS_LIMIT": 100,                          # 最终精选的IP数量
     
     # 数据源配置
-    "CLOUDFLARE_IPS_URL": 
-    "https://www.cloudflare.com/ips-v4",  # Cloudflare IP段源地址
-    
-    # 地区映射配置
-    "REGION_MAPPING": {
-        'US': ['🇺🇸 美国', 'US', 'United States'],      # 美国地区
-        'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],         # 新加坡地区
-        'JP': ['🇯🇵 日本', 'JP', 'Japan'],               # 日本地区
-        'HK': ['🇭🇰 香港', 'HK', 'Hong Kong'],           # 香港地区
-        'KR': ['🇰🇷 韩国', 'KR', 'South Korea'],         # 韩国地区
-        'DE': ['🇩🇪 德国', 'DE', 'Germany'],             # 德国地区
-        'GB': ['🇬🇧 英国', 'GB', 'United Kingdom']       # 英国地区
-    }
+    "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",  # Cloudflare IP段源地址
 }
 
 ####################################################
@@ -126,35 +111,36 @@ def url_test(ip, url=None, timeout=None, retry=None):
     
     return avg_rtt, loss_rate
 
-def get_ip_region(ip):
-    """获取IP地区信息 - 使用ip-api.com服务"""
-    try:
-        # 调用IP地理位置API
-        response = requests.get(f'http://ip-api.com/json/{ip}?fields=status,countryCode', timeout=3)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('status') == 'success':
-                country_code = data.get('countryCode')
-                # 国家代码到地区代码的映射
-                region_map = {
-                    'US': 'US', 'CA': 'US', 'MX': 'US',      # 北美地区映射到US
-                    'SG': 'SG', 'JP': 'JP', 'KR': 'KR',      # 亚洲主要地区
-                    'TW': 'HK', 'MO': 'HK', 'CN': 'HK',      # 中华地区映射到HK
-                    'GB': 'GB', 'DE': 'DE', 'FR': 'DE'       # 欧洲地区
-                }
-                return region_map.get(country_code, 'US')    # 默认返回美国
-    except:
-        pass
+def get_simple_region(ip):
+    """简化版地区检测 - 基于IP段推测"""
+    # 根据Cloudflare IP段特征推测地区
+    first_octet = ip.split('.')[0]
     
-    # 如果API调用失败，根据IP段推测地区
-    if ip.startswith(('8.8.', '8.9.', '8.10.')):
-        return 'US'      # 8.8.x.x 段通常在美国
-    elif ip.startswith(('103.21.', '103.22.', '104.16.')):
-        return 'SG'      # 103.21.x.x 段通常在新加坡
-    elif ip.startswith(('108.162.', '162.158.')):
-        return 'JP'      # 108.162.x.x 段通常在日本
+    # 基于常见Cloudflare IP段进行简单映射
+    if first_octet in ['1', '14', '27', '36', '39', '42', '43', '49', '58', '59', '61', '101', '103', '106', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '133', '134', '135', '136', '137', '138', '139', '140', '144', '150', '153', '157', '158', '159', '160', '161', '162', '163', '164', '165', '167', '168', '169', '170', '171', '172', '173', '174', '175', '180', '182', '183', '192', '198', '202', '203', '210', '211', '218', '219', '220', '221', '222']:
+        return 'US'  # 美国
+    
+    elif first_octet in ['8', '23', '31', '45', '64', '65', '66', '67', '68', '69', '70', '71', '72', '73', '74', '75', '76', '96', '97', '98', '99', '104', '108', '141', '147', '154', '162', '172', '173', '185', '188', '190', '191', '192', '193', '194', '195', '198', '199']:
+        return 'EU'  # 欧洲
+    
+    elif first_octet in ['103', '104', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '133', '134', '135', '136', '137', '138', '139', '140', '144', '150', '153', '157', '158', '159', '160', '161', '162', '163', '164', '165', '167', '168', '169', '170', '171', '172', '173', '174', '175', '180', '182', '183']:
+        return 'HK'  # 香港
+    
     else:
-        return 'US'      # 默认返回美国
+        return '未知'  # 未知
+
+def get_region_display(region_code):
+    """根据地区代码返回显示格式"""
+    region_display = {
+        'US': '🇺🇸 美国',
+        'EU': '🇩🇪 德国', 
+        'HK': '🇭🇰 香港',
+        'SG': '🇸🇬 新加坡',
+        'JP': '🇯🇵 日本',
+        'KR': '🇰🇷 韩国',
+        'GB': '🇬🇧 英国'
+    }
+    return region_display.get(region_code, '🇺🇸 美国')
 
 ####################################################
 # 输出格式化函数
@@ -166,8 +152,7 @@ def format_ip_with_region(ip_data, port=None):
         port = CONFIG["PORT"]
     
     region_code = ip_data.get('regionCode', 'US')
-    region_info = CONFIG["REGION_MAPPING"].get(region_code, ['🇺🇸 美国'])
-    flag_and_name = region_info[0]
+    flag_and_name = get_region_display(region_code)
     
     return f"{ip_data['ip']}:{port}#{flag_and_name}"
 
@@ -224,15 +209,14 @@ def test_ip(ip):
 def enhance_ip_info(ip_data):
     """为IP数据添加地区信息"""
     ip, rtt, loss = ip_data
-    region_code = get_ip_region(ip)
-    region_name = CONFIG["REGION_MAPPING"].get(region_code, ['🇺🇸 美国'])[0]
+    region_code = get_simple_region(ip)
     
     return {
         'ip': ip,
         'rtt': rtt,
         'loss': loss,
         'regionCode': region_code,
-        'regionName': region_name
+        'regionName': get_region_display(region_code)
     }
 
 ####################################################
@@ -301,10 +285,10 @@ if __name__ == "__main__":
         print("❌ 没有合格的IP")
         exit(1)
     
-    # 步骤5：为IP添加地理位置信息
-    print("检测地理位置...")
+    # 步骤5：为IP添加地区信息
+    print("添加地区信息...")
     enhanced_ips = []
-    for ip_data in tqdm(passed_ips, desc="地理位置"):
+    for ip_data in tqdm(passed_ips, desc="地区信息"):
         enhanced_ips.append(enhance_ip_info(ip_data))
     
     # 步骤6：按延迟排序并选择最佳IP
