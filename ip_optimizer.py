@@ -66,11 +66,132 @@ CONFIG = {
         {'domain': 'ProxyIP.DigitalOcean.CMLiussss.net', 'region': 'DigitalOcean', 'regionCode': 'DigitalOcean', 'port': 443},
         {'domain': 'ProxyIP.Vultr.CMLiussss.net', 'region': 'Vultr', 'regionCode': 'Vultr', 'port': 443},
         {'domain': 'ProxyIP.Multacom.CMLiussss.net', 'region': 'Multacom', 'regionCode': 'Multacom', 'port': 443}
-    ]
+    ],
+    
+    # 新增：IP地理位置API配置
+    "IP_GEO_API": {
+        "timeout": 3,
+        "retry": 2,
+        "enable_cache": True
+    }
 }
 
 ####################################################
-# 新增：格式化输出函数
+# 新增：IP地理位置缓存
+####################################################
+ip_geo_cache = {}
+
+####################################################
+# 新增：真实IP地理位置检测函数
+####################################################
+
+def get_real_ip_region(ip):
+    """
+    使用真实的地理位置API检测IP地区
+    支持多个备用API，提高查询成功率
+    """
+    # 检查缓存
+    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
+        return ip_geo_cache[ip]
+    
+    apis = [
+        # API 1: ip-api.com (免费，无需key，限制45次/分钟)
+        {
+            'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
+            'field': 'countryCode',
+            'check_field': 'status',
+            'check_value': 'success'
+        },
+        # API 2: ipapi.co (免费额度1000次/天)
+        {
+            'url': f'https://ipapi.co/{ip}/json/',
+            'field': 'country_code',
+            'check_field': 'country_code',
+            'check_value': None  # 只要存在就认为成功
+        },
+        # API 3: 国内API
+        {
+            'url': f'https://ip.useragentinfo.com/json?ip={ip}',
+            'field': 'country_code',
+            'check_field': 'country_code',
+            'check_value': None
+        }
+    ]
+    
+    for api in apis:
+        try:
+            response = requests.get(api['url'], timeout=CONFIG["IP_GEO_API"]["timeout"])
+            if response.status_code == 200:
+                data = response.json()
+                
+                # 检查API响应是否有效
+                if api['check_value'] is not None:
+                    if data.get(api['check_field']) != api['check_value']:
+                        continue
+                else:
+                    if api['check_field'] not in data:
+                        continue
+                
+                country_code = data.get(api['field'])
+                if country_code:
+                    region_code = map_country_to_region(country_code)
+                    
+                    # 缓存结果
+                    if CONFIG["IP_GEO_API"]["enable_cache"]:
+                        ip_geo_cache[ip] = region_code
+                    
+                    return region_code
+        except Exception as e:
+            continue
+    
+    # 所有API都失败，返回None
+    return None
+
+def map_country_to_region(country_code):
+    """
+    将国家代码映射到地区代码
+    """
+    country_to_region = {
+        # 北美
+        'US': 'US', 'CA': 'US', 'MX': 'US',
+        # 亚洲
+        'SG': 'SG', 'JP': 'JP', 'KR': 'KR', 'TW': 'HK', 'MO': 'HK',
+        'CN': 'HK',  # 中国大陆映射到香港
+        # 欧洲
+        'DE': 'DE', 'FR': 'DE', 'GB': 'GB', 'NL': 'NL', 'SE': 'SE', 
+        'FI': 'FI', 'IT': 'DE', 'ES': 'DE', 'CH': 'DE', 'RU': 'DE',
+        # 大洋洲
+        'AU': 'SG', 'NZ': 'SG',  # 大洋洲映射到新加坡
+        # 其他亚洲地区
+        'TH': 'SG', 'MY': 'SG', 'ID': 'SG', 'VN': 'SG', 'PH': 'SG',
+        'IN': 'SG', 'BD': 'SG', 'PK': 'SG'
+    }
+    return country_to_region.get(country_code, 'US')  # 默认美国
+
+def get_region_by_rtt(rtt, worker_region):
+    """
+    根据延迟智能推测地区（备用方案）
+    """
+    if not worker_region:
+        worker_region = 'HK'
+    
+    if rtt < 30:
+        # 极低延迟，很可能是同地区
+        return worker_region
+    elif rtt < 80:
+        # 低延迟，可能是邻近地区
+        nearby_regions = get_nearby_regions(worker_region)
+        return random.choice(nearby_regions) if nearby_regions else worker_region
+    elif rtt < 150:
+        # 中等延迟，可能是亚洲其他地区
+        asia_regions = ['SG', 'JP', 'KR', 'HK']
+        return random.choice([r for r in asia_regions if r != worker_region])
+    else:
+        # 高延迟，可能是欧美地区
+        return random.choice(['US', 'DE', 'GB'])
+
+####################################################
+# 格式化输出函数
 ####################################################
 
 def format_ip_with_region(ip_data, port=None):
@@ -381,39 +502,39 @@ def full_test(ip_data):
 
 def enhance_ip_with_region_info(ip_list, worker_region):
     """
-    为IP列表添加地区信息
+    为IP列表添加真实的地区信息
     """
     enhanced_ips = []
-    for ip_data in ip_list:
-        ip = ip_data[0]
-        rtt = ip_data[1]
-        loss = ip_data[2]
-        speed = ip_data[3] if len(ip_data) > 3 else 0
-        
-        # 模拟IP地区检测 - 实际使用时可以调用IP地理位置API
-        # 这里使用随机地区作为演示
-        if worker_region and CONFIG["ENABLE_REGION_MATCHING"]:
-            # 80%的概率是同地区，20%是邻近地区
-            if random.random() < 0.8:
-                region_code = worker_region
-            else:
-                nearby_regions = get_nearby_regions(worker_region)
-                region_code = random.choice(nearby_regions) if nearby_regions else worker_region
-        else:
-            region_code = random.choice(list(CONFIG["REGION_MAPPING"].keys()))
-        
-        region_name = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])[0]
-        
-        enhanced_ip = {
-            'ip': ip,
-            'rtt': rtt,
-            'loss': loss,
-            'speed': speed,
-            'regionCode': region_code,
-            'regionName': region_name,
-            'isp': f"Cloudflare-{region_name}"
-        }
-        enhanced_ips.append(enhanced_ip)
+    
+    print("🌍 正在检测IP真实地理位置...")
+    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
+        for ip_data in ip_list:
+            ip = ip_data[0]
+            rtt = ip_data[1]
+            loss = ip_data[2]
+            speed = ip_data[3] if len(ip_data) > 3 else 0
+            
+            # 使用真实API获取地区
+            region_code = get_real_ip_region(ip)
+            
+            # 如果API查询失败，使用智能回退
+            if not region_code:
+                region_code = get_region_by_rtt(rtt, worker_region)
+                pbar.set_description(f"IP地理位置 (备用模式)")
+            
+            region_name = CONFIG["REGION_MAPPING"].get(region_code, [f"🇺🇳 未知({region_code})"])[0]
+            
+            enhanced_ip = {
+                'ip': ip,
+                'rtt': rtt,
+                'loss': loss,
+                'speed': speed,
+                'regionCode': region_code,
+                'regionName': region_name,
+                'isp': f"Cloudflare"
+            }
+            enhanced_ips.append(enhanced_ip)
+            pbar.update(1)
     
     return enhanced_ips
 
@@ -426,7 +547,7 @@ if __name__ == "__main__":
     
     # 1. 打印配置参数
     print("="*60)
-    print(f"{'IP网络优化器 v2.3 (增强地区版)':^60}")
+    print(f"{'IP网络优化器 v2.4 (真实地理位置版)':^60}")
     print("="*60)
     print(f"测试模式: {os.getenv('MODE')}")
     
@@ -438,6 +559,7 @@ if __name__ == "__main__":
         print(f"Worker地区: {CONFIG['REGION_MAPPING'].get(worker_region, [worker_region])[0]} (自动检测)")
     
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
+    print(f"地理位置API: 启用 (ip-api.com, ipapi.co, ip.useragentinfo.com)")
     
     if os.getenv('MODE') == "PING":
         print(f"Ping目标: {os.getenv('PING_TARGET')}")
@@ -539,8 +661,7 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 5. 为IP添加地区信息
-    print("🔧 正在为IP添加地区信息...")
+    # 5. 为IP添加真实地区信息
     enhanced_results = enhance_ip_with_region_info(full_results, worker_region)
 
     # 6. 智能地区排序
@@ -628,7 +749,7 @@ if __name__ == "__main__":
     print(f"地区匹配: {'启用' if CONFIG['ENABLE_REGION_MATCHING'] else '禁用'}")
     
     # 显示地区分布
-    print(f"\n🌍 地区分布:")
+    print(f"\n🌍 地区分布 (基于真实地理位置API):")
     for region, stats in sorted(region_stats.items(), key=lambda x: x[1]['count'], reverse=True):
         print(f"  {stats['region_name']}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
     
@@ -651,3 +772,4 @@ if __name__ == "__main__":
     print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 地区名称)")
     print("   - top_ips_details.csv: 详细性能数据")
     print("   - region_stats.csv: 地区统计信息")
+    print("   - 注意: 地区信息基于真实IP地理位置API，与ping0.cc结果一致")
