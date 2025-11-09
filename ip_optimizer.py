@@ -23,24 +23,32 @@ CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：PING/TCP/URL_TEST
     "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
-    "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
+    "URL_TEST_TIMEOUT": 5,  # URL测试超时(秒) - 为IPv6增加时间
     "URL_TEST_RETRY": 2,  # URL测试重试次数
-    "PING_COUNT": 5,  # Ping次数
-    "PING_TIMEOUT": 3,  # Ping超时(秒)
+    "PING_COUNT": 3,  # Ping次数 - 减少以加快测试
+    "PING_TIMEOUT": 5,  # Ping超时(秒) - 为IPv6增加时间
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~400",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
-    "THREADS": 300,  # 并发线程数
+    "THREADS": 100,  # 并发线程数 - 减少以避免IPv6连接问题
     "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 1000,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 100,  # 精选IP数量
+    "TEST_IP_COUNT": 200,  # 实际测试IP数量 - 减少IPv6测试数量
+    "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
+    "CLOUDFLARE_IPS_V6_URL": "https://www.cloudflare.com/ips-v6",  # 新增IPv6 IP段URL
     "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
     "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
-    "ENABLE_IPV6": False,  # 是否启用IPv6测试
+    "ENABLE_IPV6": False,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
     "TCP_RETRY": 2,  # TCP重试次数
-    "SPEED_TIMEOUT": 5,  # 测速超时时间
-    "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
+    "SPEED_TIMEOUT": 8,  # 测速超时时间 - 为IPv6增加时间
+    "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=5000000",  # 测速URL - 减少数据量
+    
+    # IPv6专用测试URL（支持IPv6访问）
+    "IPV6_TEST_URLS": [
+        "http://ipv6.google.com/generate_204",
+        "http://www.gstatic.com/generate_204",  # 这个也支持IPv6
+        "http://cp.cloudflare.com/",
+    ],
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -74,6 +82,41 @@ CONFIG = {
 
 # IP地理位置缓存
 ip_geo_cache = {}
+
+####################################################
+# IPv6专用工具函数
+####################################################
+
+def is_ipv6_address(ip_str):
+    """检查是否为IPv6地址"""
+    try:
+        return ':' in ip_str and ipaddress.IPv6Address(ip_str)
+    except:
+        return False
+
+def format_ipv6_for_url(ip):
+    """格式化IPv6地址用于URL"""
+    if is_ipv6_address(ip):
+        return f"[{ip}]"
+    return ip
+
+def format_ipv6_for_socket(ip):
+    """格式化IPv6地址用于socket连接"""
+    if is_ipv6_address(ip):
+        return ip
+    return ip
+
+def get_ipv6_test_url():
+    """获取支持IPv6的测试URL"""
+    for test_url in CONFIG["IPV6_TEST_URLS"]:
+        try:
+            # 简单的可用性检查
+            response = requests.get(test_url, timeout=5, verify=False)
+            if response.status_code < 500:
+                return test_url
+        except:
+            continue
+    return CONFIG["IPV6_TEST_URLS"][0]  # 回退到第一个
 
 ####################################################
 # IP工具函数
@@ -163,10 +206,25 @@ def get_real_ip_country_code(ip):
     if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
         return ip_geo_cache[ip]
     
-    # 如果是IPv6地址，直接返回UN（大多数API对IPv6支持有限）
-    if ':' in ip:
-        return 'UN'
+    # 如果是IPv6地址，使用专门的IPv6查询或返回UN
+    if is_ipv6_address(ip):
+        # 尝试IPv6专用的地理位置查询
+        try:
+            # ipapi.co 支持IPv6
+            response = requests.get(f'https://ipapi.co/{ip}/json/', 
+                                  timeout=CONFIG["IP_GEO_API"]["timeout"], 
+                                  verify=False)
+            if response.status_code == 200:
+                data = response.json()
+                country_code = data.get('country_code')
+                if country_code:
+                    ip_geo_cache[ip] = country_code
+                    return country_code
+        except:
+            pass
+        return 'UN'  # IPv6直接返回未知
     
+    # IPv4的查询逻辑保持不变
     apis = [
         {
             'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
@@ -221,16 +279,20 @@ def get_real_ip_country_code(ip):
     return 'UN'
 
 ####################################################
-# URL测试函数
+# URL测试函数 - 修复IPv6支持
 ####################################################
 
 def url_test(ip, url=None, timeout=None, retry=None):
     """
-    URL Test模式延迟检测
-    支持HTTP和HTTPS，更好的错误处理和超时控制
+    URL Test模式延迟检测 - 修复IPv6支持
     """
     if url is None:
-        url = CONFIG["URL_TEST_TARGET"]
+        # 根据IP类型选择测试URL
+        if is_ipv6_address(ip):
+            url = get_ipv6_test_url()
+        else:
+            url = CONFIG["URL_TEST_TARGET"]
+    
     if timeout is None:
         timeout = CONFIG["URL_TEST_TIMEOUT"]
     if retry is None:
@@ -257,11 +319,13 @@ def url_test(ip, url=None, timeout=None, retry=None):
                 context.verify_mode = ssl.CERT_NONE
                 
                 # 处理IPv6地址
-                if ':' in ip:
-                    # IPv6地址需要方括号
+                if is_ipv6_address(ip):
                     target_ip = f"[{ip}]"
+                    # 对于IPv6，使用host参数而不是修改Host头
+                    actual_hostname = ip
                 else:
                     target_ip = ip
+                    actual_hostname = hostname
                 
                 conn = http.client.HTTPSConnection(
                     target_ip, 
@@ -271,10 +335,12 @@ def url_test(ip, url=None, timeout=None, retry=None):
                 )
             else:
                 # HTTP请求
-                if ':' in ip:
+                if is_ipv6_address(ip):
                     target_ip = f"[{ip}]"
+                    actual_hostname = ip
                 else:
                     target_ip = ip
+                    actual_hostname = hostname
                 
                 conn = http.client.HTTPConnection(
                     target_ip,
@@ -282,13 +348,16 @@ def url_test(ip, url=None, timeout=None, retry=None):
                     timeout=timeout
                 )
             
-            # 设置请求头
+            # 设置请求头 - 对于IPv6直接访问，不需要Host头
             headers = {
-                'Host': hostname,
                 'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
                 'Accept': '*/*',
                 'Connection': 'close'
             }
+            
+            # 只有非直接IP访问时才添加Host头
+            if actual_hostname != ip:
+                headers['Host'] = actual_hostname
             
             conn.request("GET", path, headers=headers)
             response = conn.getresponse()
@@ -312,7 +381,7 @@ def url_test(ip, url=None, timeout=None, retry=None):
             continue
         except ssl.SSLError:
             continue
-        except Exception:
+        except Exception as e:
             continue
         
         # 短暂间隔避免过于频繁
@@ -331,10 +400,14 @@ def url_test(ip, url=None, timeout=None, retry=None):
 
 def url_test_requests(ip, url=None, timeout=None, retry=None):
     """
-    备选的requests库版本URL测试
+    备选的requests库版本URL测试 - 修复IPv6支持
     """
     if url is None:
-        url = CONFIG["URL_TEST_TARGET"]
+        if is_ipv6_address(ip):
+            url = get_ipv6_test_url()
+        else:
+            url = CONFIG["URL_TEST_TARGET"]
+    
     if timeout is None:
         timeout = CONFIG["URL_TEST_TIMEOUT"]
     if retry is None:
@@ -351,31 +424,35 @@ def url_test_requests(ip, url=None, timeout=None, retry=None):
             start_time = time.time()
             
             # 构建使用IP直接访问的URL
-            if ':' in ip:
+            if is_ipv6_address(ip):
                 # IPv6地址
                 if parsed_url.port:
                     actual_url = f"{parsed_url.scheme}://[{ip}]:{parsed_url.port}{parsed_url.path}"
                 else:
                     actual_url = f"{parsed_url.scheme}://[{ip}]{parsed_url.path}"
+                # 对于IPv6直接访问，不需要Host头
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
+                    'Accept': '*/*'
+                }
             else:
                 # IPv4地址
                 if parsed_url.port:
                     actual_url = f"{parsed_url.scheme}://{ip}:{parsed_url.port}{parsed_url.path}"
                 else:
                     actual_url = f"{parsed_url.scheme}://{ip}{parsed_url.path}"
-            
-            headers = {
-                'Host': parsed_url.hostname,
-                'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
-                'Accept': '*/*'
-            }
+                headers = {
+                    'Host': parsed_url.hostname,
+                    'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
+                    'Accept': '*/*'
+                }
             
             response = requests.get(
                 actual_url,
                 headers=headers,
                 timeout=timeout,
                 verify=False,
-                allow_redirects=True,
+                allow_redirects=False,  # 禁止重定向以避免问题
                 stream=True
             )
             
@@ -414,27 +491,41 @@ def smart_url_test(ip, url=None, timeout=None, retry=None):
     """
     智能URL测试 - 自动选择最佳测试方法
     """
-    # 先尝试http.client版本（更快）
-    try:
-        return url_test(ip, url, timeout, retry)
-    except Exception:
-        # 回退到requests版本
+    # 对于IPv6，优先使用requests版本
+    if is_ipv6_address(ip):
         return url_test_requests(ip, url, timeout, retry)
+    else:
+        # 先尝试http.client版本（更快）
+        try:
+            return url_test(ip, url, timeout, retry)
+        except Exception:
+            # 回退到requests版本
+            return url_test_requests(ip, url, timeout, retry)
 
 ####################################################
-# 其他测试函数
+# 其他测试函数 - 修复IPv6支持
 ####################################################
 
 def custom_ping(ip):
-    """自定义Ping测试"""
+    """自定义Ping测试 - 修复IPv6支持"""
     target = urlparse(CONFIG["PING_TARGET"]).netloc or CONFIG["PING_TARGET"]
     count = CONFIG["PING_COUNT"]
     timeout = CONFIG["PING_TIMEOUT"]
+    
     try:
-        if os.name == 'nt':
-            cmd = f"ping -n {count} -w {timeout*1000} {target}"
+        if is_ipv6_address(ip):
+            # IPv6 ping命令
+            if os.name == 'nt':  # Windows
+                cmd = f"ping -n {count} -w {timeout*1000} {target}"
+            else:  # Linux/Mac
+                cmd = f"ping6 -c {count} -W {timeout} {target}"
         else:
-            cmd = f"ping -c {count} -W {timeout} -I {ip} {target}"
+            # IPv4 ping命令
+            if os.name == 'nt':
+                cmd = f"ping -n {count} -w {timeout*1000} {target}"
+            else:
+                cmd = f"ping -c {count} -W {timeout} -I {ip} {target}"
+                
         result = subprocess.run(
             cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout + 2
         )
@@ -464,52 +555,69 @@ def custom_ping(ip):
     except subprocess.TimeoutExpired:
         return float('inf'), 100.0
     except Exception as e:
-        print(f"Ping测试异常: {e}")
         return float('inf'), 100.0
 
 def tcp_ping(ip, port, timeout=2):
-    """TCP Ping测试"""
+    """TCP Ping测试 - 修复IPv6支持"""
     retry = CONFIG["TCP_RETRY"]
     success_count = 0
     total_rtt = 0
     
     # 处理IPv6地址
-    if ':' in ip:
-        target_ip = f"[{ip}]"
+    if is_ipv6_address(ip):
+        target_ip = format_ipv6_for_socket(ip)
+        # 对于IPv6，增加超时时间
+        timeout = max(timeout, 3)
     else:
         target_ip = ip
         
     for _ in range(retry):
         start = time.time()
         try:
-            with socket.create_connection((target_ip, port), timeout=timeout) as sock:
-                rtt = (time.time() - start) * 1000
-                total_rtt += rtt
-                success_count += 1
+            # 设置socket选项以支持IPv6
+            if is_ipv6_address(ip):
+                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            else:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((target_ip, port))
+            rtt = (time.time() - start) * 1000
+            total_rtt += rtt
+            success_count += 1
+            sock.close()
         except:
             pass
         time.sleep(0.1)
+    
     loss_rate = 100 - (success_count / retry * 100)
     avg_rtt = total_rtt / success_count if success_count > 0 else float('inf')
     return avg_rtt, loss_rate
 
 def speed_test(ip):
-    """速度测试"""
+    """速度测试 - 修复IPv6支持"""
     url = CONFIG["SPEED_URL"]
     timeout = CONFIG["SPEED_TIMEOUT"]
+    
+    # 对于IPv6，减少测试数据量
+    if is_ipv6_address(ip):
+        url = url.replace('10000000', '2000000')  # 减少到2MB
+        timeout = max(timeout, 8)  # 增加超时时间
+    
     try:
         parsed_url = urlparse(url)
         host = parsed_url.hostname
         
         # 处理IPv6地址
-        if ':' in ip:
+        if is_ipv6_address(ip):
             actual_url = f"https://[{ip}]{parsed_url.path}"
+            headers = {'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)'}
         else:
             actual_url = f"https://{ip}{parsed_url.path}"
+            headers = {'Host': host, 'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)'}
             
         start_time = time.time()
         response = requests.get(
-            actual_url, headers={'Host': host}, timeout=timeout, verify=False, stream=True
+            actual_url, headers=headers, timeout=timeout, verify=False, stream=True
         )
         total_bytes = 0
         for chunk in response.iter_content(chunk_size=8192):
@@ -571,7 +679,10 @@ def clean_local_ip_pool():
     print("🚀 开始延迟测试筛选IP...")
     test_results = []
     
-    with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
+    # 减少线程数以避免IPv6连接问题
+    threads = min(CONFIG["THREADS"], 50)
+    
+    with ThreadPoolExecutor(max_workers=threads) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in unique_ips}
         with tqdm(total=len(unique_ips), desc="延迟测试", unit="IP") as pbar:
             for future in as_completed(future_to_ip):
@@ -662,7 +773,7 @@ def analyze_local_ip_pool():
             # 尝试提取IP
             ip = extract_ip_from_line(line)
             if ip:
-                if ':' in ip:
+                if is_ipv6_address(ip):
                     ipv6_ips.append(ip)
                 else:
                     ipv4_ips.append(ip)
@@ -709,7 +820,7 @@ def generate_ips_from_local_pool():
     # 从IPv4网段生成IP
     ipv4_from_subnets = []
     for subnet in ipv4_subnets:
-        ips = generate_ips_from_subnet(subnet, 5)  # 每个网段生成5个IP
+        ips = generate_ips_from_subnet(subnet, 3)  # 每个网段生成3个IP
         ipv4_from_subnets.extend(ips)
     
     all_ips.extend(ipv4_from_subnets)
@@ -718,7 +829,7 @@ def generate_ips_from_local_pool():
     if CONFIG["ENABLE_IPV6"]:
         ipv6_from_subnets = []
         for subnet in ipv6_subnets:
-            ips = generate_ips_from_subnet(subnet, 3)  # 每个IPv6网段生成3个IP
+            ips = generate_ips_from_subnet(subnet, 2)  # 每个IPv6网段生成2个IP
             ipv6_from_subnets.extend(ips)
         all_ips.extend(ipv6_from_subnets)
     
@@ -739,39 +850,57 @@ def fetch_cloudflare_ip_ranges():
     """
     从Cloudflare URL获取IP段
     """
-    url = CONFIG["CLOUDFLARE_IPS_URL"]
-    try:
-        print(f"🌐 从Cloudflare获取IP段: {url}")
-        res = requests.get(url, timeout=10, verify=False)
-        if res.status_code == 200:
-            subnets = res.text.splitlines()
-            subnets = [subnet.strip() for subnet in subnets if subnet.strip()]
-            print(f"✅ 从Cloudflare获取到 {len(subnets)} 个IP段")
-            return subnets
-        else:
-            print(f"❌ Cloudflare返回状态码: {res.status_code}")
-    except Exception as e:
-        print(f"🚨 获取Cloudflare IP段失败: {e}")
+    urls = [CONFIG["CLOUDFLARE_IPS_URL"]]
+    if CONFIG["ENABLE_IPV6"]:
+        urls.append(CONFIG["CLOUDFLARE_IPS_V6_URL"])
     
-    return []
+    all_subnets = []
+    for url in urls:
+        try:
+            print(f"🌐 从Cloudflare获取IP段: {url}")
+            res = requests.get(url, timeout=10, verify=False)
+            if res.status_code == 200:
+                subnets = res.text.splitlines()
+                subnets = [subnet.strip() for subnet in subnets if subnet.strip()]
+                print(f"✅ 从Cloudflare获取到 {len(subnets)} 个IP段")
+                all_subnets.extend(subnets)
+            else:
+                print(f"❌ Cloudflare返回状态码: {res.status_code}")
+        except Exception as e:
+            print(f"🚨 获取Cloudflare IP段失败: {e}")
+    
+    return all_subnets
 
 def generate_random_ip(subnet):
     """根据CIDR生成子网内的随机合法IP"""
     try:
         network = ipaddress.ip_network(subnet, strict=False)
-        network_addr = int(network.network_address)
-        broadcast_addr = int(network.broadcast_address)
-        first_ip = network_addr + 1
-        last_ip = broadcast_addr - 1
-        random_ip_int = random.randint(first_ip, last_ip)
-        return str(ipaddress.IPv4Address(random_ip_int))
+        if network.version == 6:
+            # IPv6生成策略
+            network_addr = int(network.network_address)
+            broadcast_addr = int(network.broadcast_address)
+            # 对于IPv6，生成更少的IP
+            random_ip_int = random.randint(network_addr, broadcast_addr)
+            return str(ipaddress.IPv6Address(random_ip_int))
+        else:
+            # IPv4生成策略
+            network_addr = int(network.network_address)
+            broadcast_addr = int(network.broadcast_address)
+            first_ip = network_addr + 1
+            last_ip = broadcast_addr - 1
+            random_ip_int = random.randint(first_ip, last_ip)
+            return str(ipaddress.IPv4Address(random_ip_int))
     except Exception as e:
-        base_ip = subnet.split('/')[0]
-        parts = base_ip.split('.')
-        while len(parts) < 4:
-            parts.append(str(random.randint(0, 255)))
-        parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
-        return ".".join(parts)
+        # 备用生成方法
+        if ':' in subnet:  # IPv6
+            return "2001:db8::1"  # 示例IPv6
+        else:  # IPv4
+            base_ip = subnet.split('/')[0]
+            parts = base_ip.split('.')
+            while len(parts) < 4:
+                parts.append(str(random.randint(0, 255)))
+            parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
+            return ".".join(parts)
 
 def generate_cloudflare_ip_pool():
     """
@@ -785,9 +914,19 @@ def generate_cloudflare_ip_pool():
     full_ip_pool = set()
     
     print(f"🔧 正在生成 {ip_pool_size} 个Cloudflare随机IP...")
+    
+    # 分离IPv4和IPv6子网
+    ipv4_subnets = [s for s in subnets if ':' not in s]
+    ipv6_subnets = [s for s in subnets if ':' in s]
+    
     with tqdm(total=ip_pool_size, desc="生成Cloudflare IP", unit="IP") as pbar:
         while len(full_ip_pool) < ip_pool_size:
-            subnet = random.choice(subnets)
+            # 根据配置决定生成IPv4还是IPv6
+            if CONFIG["ENABLE_IPV6"] and ipv6_subnets and random.random() < 0.3:  # 30%概率生成IPv6
+                subnet = random.choice(ipv6_subnets)
+            else:
+                subnet = random.choice(ipv4_subnets)
+            
             ip = generate_random_ip(subnet)
             if ip not in full_ip_pool:
                 full_ip_pool.add(ip)
@@ -860,26 +999,56 @@ def enhance_ip_with_country_info(ip_list):
     enhanced_ips = []
     
     print("🌍 正在检测IP真实地理位置...")
-    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
+    
+    # 对于IPv6，减少并发数
+    threads = min(CONFIG["THREADS"], 20) if any(is_ipv6_address(ip_data[0]) for ip_data in ip_list) else CONFIG["THREADS"]
+    
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        future_to_ip = {}
         for ip_data in ip_list:
             ip = ip_data[0]
-            rtt = ip_data[1]
-            loss = ip_data[2]
-            speed = ip_data[3] if len(ip_data) > 3 else 0
-            
-            country_code = get_real_ip_country_code(ip)
-            
-            enhanced_ip = {
-                'ip': ip,
-                'rtt': rtt,
-                'loss': loss,
-                'speed': speed,
-                'countryCode': country_code,
-                'isp': "Cloudflare",
-                'is_ipv6': ':' in ip  # 标记是否为IPv6
-            }
-            enhanced_ips.append(enhanced_ip)
-            pbar.update(1)
+            future = executor.submit(get_real_ip_country_code, ip)
+            future_to_ip[future] = ip_data
+        
+        with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
+            for future in as_completed(future_to_ip):
+                ip_data = future_to_ip[future]
+                try:
+                    country_code = future.result()
+                    ip = ip_data[0]
+                    rtt = ip_data[1]
+                    loss = ip_data[2]
+                    speed = ip_data[3] if len(ip_data) > 3 else 0
+                    
+                    enhanced_ip = {
+                        'ip': ip,
+                        'rtt': rtt,
+                        'loss': loss,
+                        'speed': speed,
+                        'countryCode': country_code,
+                        'isp': "Cloudflare",
+                        'is_ipv6': is_ipv6_address(ip)
+                    }
+                    enhanced_ips.append(enhanced_ip)
+                except Exception:
+                    # 如果查询失败，使用默认值
+                    ip = ip_data[0]
+                    rtt = ip_data[1]
+                    loss = ip_data[2]
+                    speed = ip_data[3] if len(ip_data) > 3 else 0
+                    
+                    enhanced_ip = {
+                        'ip': ip,
+                        'rtt': rtt,
+                        'loss': loss,
+                        'speed': speed,
+                        'countryCode': 'UN',
+                        'isp': "Cloudflare",
+                        'is_ipv6': is_ipv6_address(ip)
+                    }
+                    enhanced_ips.append(enhanced_ip)
+                finally:
+                    pbar.update(1)
     
     return enhanced_ips
 
@@ -940,6 +1109,7 @@ def validate_test_urls():
     """
     print("🔍 验证测试URL可用性...")
     
+    # 测试IPv4 URL
     for test_url in CONFIG["BACKUP_TEST_URLS"]:
         try:
             start_time = time.time()
@@ -970,6 +1140,15 @@ if __name__ == "__main__":
     
     # 0. 初始化环境
     init_env()
+    
+    # 检查IPv6支持并给出警告
+    if CONFIG["ENABLE_IPV6"]:
+        print("⚠️  IPv6支持已开启，请注意:")
+        print("   - 测试速度可能较慢")
+        print("   - 部分网络环境可能不支持IPv6")
+        print("   - 如果卡住，请使用 Ctrl+C 中断并关闭IPv6支持")
+        print("   - 建议首次使用时设置 TEST_IP_COUNT = 50 进行小规模测试")
+        print()
     
     # 1. 验证并选择最佳测试URL
     best_url = validate_test_urls()
@@ -1020,8 +1199,8 @@ if __name__ == "__main__":
     print(f"🔧 最终测试IP数量: {len(test_ip_pool)}")
 
     # 统计IPv4/IPv6数量
-    ipv4_count = sum(1 for ip in test_ip_pool if ':' not in ip)
-    ipv6_count = sum(1 for ip in test_ip_pool if ':' in ip)
+    ipv4_count = sum(1 for ip in test_ip_pool if not is_ipv6_address(ip))
+    ipv6_count = sum(1 for ip in test_ip_pool if is_ipv6_address(ip))
     print(f"📊 IP类型统计: IPv4: {ipv4_count}个, IPv6: {ipv6_count}个")
 
     # 4. 第一阶段：延迟测试（筛选IP）
@@ -1033,7 +1212,13 @@ if __name__ == "__main__":
     }
     progress_desc = mode_display.get(mode, "🚀 延迟测试进度")
     
-    with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
+    # 根据IPv6情况调整线程数
+    threads = CONFIG["THREADS"]
+    if ipv6_count > 0:
+        threads = min(threads, 50)  # IPv6测试减少线程数
+        print("🔧 检测到IPv6地址，已自动降低并发线程数")
+    
+    with ThreadPoolExecutor(max_workers=threads) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in test_ip_pool}
         with tqdm(
             total=len(test_ip_pool),
@@ -1063,7 +1248,7 @@ if __name__ == "__main__":
         exit(1)
     
     full_results = []
-    with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
+    with ThreadPoolExecutor(max_workers=threads) as executor:
         future_to_ip = {executor.submit(full_test, ip_data): ip_data for ip_data in passed_ips}
         with tqdm(
             total=len(passed_ips),
