@@ -37,11 +37,6 @@ CONFIG = {
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     
-    # 代理检测配置
-    "PROXY_DETECTION_TIMEOUT": 5,    # 代理检测超时
-    "PROXY_DETECTION_RETRY": 2,      # 代理检测重试次数
-    "PROXY_DETECTION_WORKERS": 50,   # 代理检测并发数
-    
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
         "http://www.gstatic.com/generate_204",
@@ -70,86 +65,69 @@ custom_ip_sources = {}  # 记录每个IP的来源：'custom' 或 'cloudflare'
 invalid_custom_subnets = set()  # 记录无效的自定义IP段
 
 ####################################################
-# 代理国家检测函数
+# 国家代码检测函数 - 简化可靠版本
 ####################################################
 
-def get_country_by_proxy_detection(ip, port=443, timeout=None):
+def get_country_by_ipapi(ip):
     """
-    通过让IP作为代理访问地理位置服务来检测真实国家代码
+    使用可靠的ip-api.com服务检测国家代码
     """
-    if timeout is None:
-        timeout = CONFIG["PROXY_DETECTION_TIMEOUT"]
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=status,countryCode"
+        response = requests.get(url, timeout=3, verify=False)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                return data.get('countryCode', 'UN')
+    except:
+        pass
+    return 'UN'
+
+def get_country_by_ipapi_co(ip):
+    """
+    使用ipapi.co服务检测国家代码
+    """
+    try:
+        url = f"https://ipapi.co/{ip}/country_code/"
+        response = requests.get(url, timeout=3, verify=False)
+        if response.status_code == 200:
+            country_code = response.text.strip()
+            if country_code and len(country_code) == 2:
+                return country_code
+    except:
+        pass
+    return 'UN'
+
+def get_country_simple(ip):
+    """
+    简化版国家代码检测 - 使用最快可用的服务
+    """
+    # 先尝试ip-api.com（免费且稳定）
+    country = get_country_by_ipapi(ip)
+    if country != 'UN':
+        return country
     
-    # 多个地理位置检测服务
-    geo_services = [
-        {
-            'name': 'ipapi.co',
-            'url': 'https://ipapi.co/country/',
-            'parse_func': lambda text: text.strip() if text.strip() else None
-        },
-        {
-            'name': 'ipinfo.io', 
-            'url': 'https://ipinfo.io/country',
-            'parse_func': lambda text: text.strip() if text.strip() else None
-        },
-        {
-            'name': 'ifconfig.co',
-            'url': 'https://ifconfig.co/country',
-            'parse_func': lambda text: text.strip() if text.strip() else None
-        }
-    ]
-    
-    # 构建代理配置
-    proxies = {
-        'http': f'http://{ip}:{port}',
-        'https': f'http://{ip}:{port}'
-    }
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (compatible; IP-Country-Checker/1.0)',
-        'Accept': '*/*'
-    }
-    
-    for service in geo_services:
-        try:
-            response = requests.get(
-                service['url'],
-                proxies=proxies,
-                headers=headers,
-                timeout=timeout,
-                verify=False
-            )
-            
-            if response.status_code == 200:
-                country_code = service['parse_func'](response.text)
-                if country_code and len(country_code) == 2 and country_code != 'XX':
-                    return country_code
-                    
-        except requests.exceptions.ConnectTimeout:
-            continue
-        except requests.exceptions.ConnectionError:
-            continue
-        except requests.exceptions.ReadTimeout:
-            continue
-        except Exception:
-            continue
+    # 备用方案：ipapi.co
+    country = get_country_by_ipapi_co(ip)
+    if country != 'UN':
+        return country
     
     return 'UN'
 
-def batch_proxy_country_detection(ip_list):
+def batch_country_detection(ip_list):
     """
-    批量进行代理国家检测
+    批量进行国家检测
     """
-    print("🌍 开始批量代理国家检测...")
+    print("🌍 开始批量国家代码检测...")
     
     results = {}
-    with ThreadPoolExecutor(max_workers=CONFIG["PROXY_DETECTION_WORKERS"]) as executor:
+    with ThreadPoolExecutor(max_workers=50) as executor:
         future_to_ip = {
-            executor.submit(get_country_by_proxy_detection, ip, CONFIG["PORT"]): ip 
+            executor.submit(get_country_simple, ip): ip 
             for ip in ip_list
         }
         
-        with tqdm(total=len(ip_list), desc="代理国家检测", unit="IP") as pbar:
+        with tqdm(total=len(ip_list), desc="国家代码检测", unit="IP") as pbar:
             for future in as_completed(future_to_ip):
                 ip = future_to_ip[future]
                 try:
@@ -162,7 +140,7 @@ def batch_proxy_country_detection(ip_list):
     
     # 统计检测结果
     success_count = sum(1 for country in results.values() if country and country != 'UN')
-    print(f"✅ 代理检测完成: {success_count}/{len(ip_list)} 个IP检测到国家代码")
+    print(f"✅ 国家检测完成: {success_count}/{len(ip_list)} 个IP检测到国家代码")
     
     return results
 
@@ -575,15 +553,15 @@ def full_test(ip_data):
 
 def enhance_ip_with_country_info(ip_list):
     """
-    为IP列表添加真实的国家代码信息 - 只使用代理检测
+    为IP列表添加真实的国家代码信息 - 使用简化可靠的检测方法
     """
     enhanced_ips = []
     
-    print("🌍 正在使用代理检测IP真实地理位置...")
+    print("🌍 正在检测IP地理位置...")
     
-    # 批量进行代理检测
+    # 批量进行国家检测
     ip_addresses = [ip_data[0] for ip_data in ip_list]
-    proxy_countries = batch_proxy_country_detection(ip_addresses)
+    countries = batch_country_detection(ip_addresses)
     
     with tqdm(total=len(ip_list), desc="补充IP信息", unit="IP") as pbar:
         for ip_data in ip_list:
@@ -592,8 +570,8 @@ def enhance_ip_with_country_info(ip_list):
             loss = ip_data[2]
             speed = ip_data[3] if len(ip_data) > 3 else 0
             
-            # 使用代理检测结果
-            country_code = proxy_countries.get(ip, 'UN')
+            # 使用检测结果
+            country_code = countries.get(ip, 'UN')
             
             enhanced_ip = {
                 'ip': ip,
@@ -807,7 +785,7 @@ if __name__ == "__main__":
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称✓ (✓表示自定义IP)")
-    print(f"地理位置检测: 代理检测🔍")
+    print(f"地理位置检测: 直接API检测")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -891,7 +869,7 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 6. 为IP添加真实国家代码信息和来源标记（只使用代理检测）
+    # 6. 为IP添加真实国家代码信息和来源标记
     enhanced_results = enhance_ip_with_country_info(full_results)
     
     # 7. 分析自定义IP段性能并删除无效IP段
@@ -965,7 +943,6 @@ if __name__ == "__main__":
     print(f"通过延迟测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
-    print(f"国家检测方法: 代理检测🔍")
     
     # 统计自定义IP表现
     custom_passed = sum(1 for ip in enhanced_results if ip.get('source') == 'custom')
