@@ -21,40 +21,30 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ####################################################
 CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：PING/TCP/URL_TEST
-    "PING_TARGET": "https://www.gstatic.com/generate_204",  # Ping测试目标
-    "URL_TEST_TARGET": "https://www.gstatic.com/generate_204",  # URL测试目标
-    "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒) - 为IPv6增加时间
+    "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
+    "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
+    "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 2,  # URL测试重试次数
-    "PING_COUNT": 3,  # Ping次数 - 减少以加快测试
-    "PING_TIMEOUT": 3,  # Ping超时(秒) - 为IPv6增加时间
+    "PING_COUNT": 5,  # Ping次数
+    "PING_TIMEOUT": 3,  # Ping超时(秒)
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~400",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
-    "THREADS": 100,  # 并发线程数 - 减少以避免IPv6连接问题
+    "THREADS": 300,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 2000,  # 实际测试IP数量 - 减少IPv6测试数量
-    "TOP_IPS_LIMIT": 88,  # 精选IP数量
+    "TEST_IP_COUNT": 1000,  # 实际测试IP数量
+    "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
-    "CLOUDFLARE_IPS_V6_URL": "https://www.cloudflare.com/ips-v6",  # 新增IPv6 IP段URL
-    "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
-    "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
-    "ENABLE_IPV6": False,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
+    "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
-    "SPEED_TIMEOUT": 5,  # 测速超时时间 - 为IPv6增加时间
-    "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=5000000",  # 测速URL - 减少数据量
-    
-    # IPv6专用测试URL（支持IPv6访问）
-    "IPV6_TEST_URLS": [
-        "http://ipv6.google.com/generate_204",
-        "http://www.gstatic.com/generate_204",  # 这个也支持IPv6
-        "http://cp.cloudflare.com/",
-    ],
+    "SPEED_TIMEOUT": 5,  # 测速超时时间
+    "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
-        "https://www.gstatic.com/generate_204",
-        "https://cp.cloudflare.com/",
-        "https://www.cloudflare.com/favicon.ico"
+        "http://www.gstatic.com/generate_204",
+        "http://cp.cloudflare.com/",
+        "http://www.cloudflare.com/favicon.ico"
     ],
     
     # 国家代码到国旗的映射
@@ -84,334 +74,6 @@ CONFIG = {
 ip_geo_cache = {}
 
 ####################################################
-# IPv6专用工具函数
-####################################################
-
-def is_ipv6_address(ip_str):
-    """检查是否为IPv6地址"""
-    try:
-        ipaddress.IPv6Address(ip_str)
-        return True
-    except:
-        return False
-
-def format_ipv6_for_url(ip):
-    """格式化IPv6地址用于URL"""
-    if is_ipv6_address(ip):
-        return f"[{ip}]"
-    return ip
-
-def format_ipv6_for_socket(ip):
-    """格式化IPv6地址用于socket连接"""
-    if is_ipv6_address(ip):
-        return ip
-    return ip
-
-def get_ipv6_test_url():
-    """获取支持IPv6的测试URL"""
-    for test_url in CONFIG["IPV6_TEST_URLS"]:
-        try:
-            # 简单的可用性检查
-            response = requests.get(test_url, timeout=5, verify=False)
-            if response.status_code < 500:
-                return test_url
-        except:
-            continue
-    return CONFIG["IPV6_TEST_URLS"][0]  # 回退到第一个
-
-####################################################
-# IP工具函数
-####################################################
-
-def is_valid_ip(ip_str):
-    """检查是否为有效的IP地址"""
-    try:
-        ipaddress.ip_address(ip_str)
-        return True
-    except:
-        return False
-
-def is_valid_subnet(subnet_str):
-    """检查是否为有效的IP段"""
-    try:
-        ipaddress.ip_network(subnet_str, strict=False)
-        return True
-    except:
-        return False
-
-def extract_ip_from_line(line):
-    """从行中提取IP地址"""
-    line = line.strip()
-    if not line or line.startswith('#'):
-        return None
-    
-    # 移除注释部分
-    if '#' in line:
-        line = line.split('#')[0].strip()
-    
-    # 处理带端口的格式 ip:port
-    if ':' in line:
-        # 检查是否是IPv6地址（包含多个冒号）
-        if line.count(':') >= 2:
-            # 可能是IPv6地址，尝试解析
-            if line.count(']') > 0:
-                # IPv6带端口格式 [::1]:443
-                parts = line.split(']')
-                if len(parts) >= 1:
-                    ip_part = parts[0].replace('[', '')
-                    if is_valid_ip(ip_part):
-                        return ip_part
-            else:
-                # 纯IPv6地址
-                if is_valid_ip(line):
-                    return line
-        else:
-            # IPv4带端口格式 1.1.1.1:443
-            ip_part = line.split(':')[0]
-            if is_valid_ip(ip_part):
-                return ip_part
-    else:
-        # 纯IP格式
-        if is_valid_ip(line):
-            return line
-    
-    return None
-
-def generate_ips_from_subnet(subnet, count=10):
-    """从IP段生成指定数量的随机IP"""
-    try:
-        network = ipaddress.ip_network(subnet, strict=False)
-        ips = []
-        
-        # 计算可用的IP数量
-        if network.num_addresses > 2:  # 排除网络地址和广播地址
-            available_ips = list(network.hosts())
-            if len(available_ips) > count:
-                ips = random.sample(available_ips, count)
-            else:
-                ips = available_ips
-        
-        return [str(ip) for ip in ips]
-    except Exception as e:
-        print(f"⚠️ 生成IP时出错 {subnet}: {e}")
-        return []
-
-def generate_ips_from_ipv6_subnet(subnet, count=5):
-    """专门为IPv6网段生成IP（修复版本）"""
-    try:
-        network = ipaddress.ip_network(subnet, strict=False)
-        
-        ips = []
-        
-        # 对于IPv6，我们不需要排除网络和广播地址，直接生成随机地址
-        if network.num_addresses > 1:
-            # 生成随机IP地址
-            for _ in range(count):
-                # 生成网络内的随机地址
-                network_int = int(network.network_address)
-                broadcast_int = int(network.broadcast_address)
-                
-                # 确保在有效范围内
-                random_ip_int = random.randint(network_int, broadcast_int)
-                random_ip = ipaddress.IPv6Address(random_ip_int)
-                
-                # 确保IP在子网内
-                if random_ip in network:
-                    ips.append(str(random_ip))
-        
-        return ips
-        
-    except Exception as e:
-        print(f"❌ 生成IPv6 IP时出错 {subnet}: {e}")
-        return []
-
-####################################################
-# 清理本地IP池功能
-####################################################
-
-def clean_local_ip_pool_comprehensive():
-    """
-    全面清理本地IP池：移除重复IP、无效IP段、延迟测试未通过的IP和IP段
-    不生成任何备份和报告文件
-    """
-    local_file = CONFIG["LOCAL_IP_POOL_FILE"]
-    
-    if not os.path.exists(local_file):
-        print(f"❌ 未找到本地IP池文件: {local_file}")
-        return
-    
-    print(f"🔍 开始全面清理本地IP池文件: {local_file}")
-    print("📝 清理内容: 重复IP、无效IP段、延迟测试未通过的IP和IP段")
-    
-    # 读取原始文件内容
-    with open(local_file, 'r', encoding='utf-8') as f:
-        original_lines = f.readlines()
-    
-    # 分析文件内容
-    valid_ips = set()
-    valid_subnets = set()
-    ip_to_line = {}
-    subnet_to_line = {}
-    duplicate_count = 0
-    invalid_subnet_count = 0
-    comment_lines = []
-    
-    for line_num, line in enumerate(original_lines):
-        line = line.strip()
-        if not line:
-            continue
-            
-        if line.startswith('#'):
-            # 保留注释行
-            comment_lines.append(line)
-            continue
-        
-        # 尝试提取IP
-        ip = extract_ip_from_line(line)
-        if ip:
-            if ip in valid_ips:
-                duplicate_count += 1
-                print(f"⚠️  发现重复IP: {ip} (第{line_num+1}行)")
-                continue
-            valid_ips.add(ip)
-            ip_to_line[ip] = line
-            continue
-        
-        # 尝试识别IP段
-        if '/' in line:
-            subnet_part = line.split('#')[0].strip() if '#' in line else line
-            try:
-                network = ipaddress.ip_network(subnet_part, strict=False)
-                subnet_str = str(network)
-                if subnet_str in valid_subnets:
-                    duplicate_count += 1
-                    print(f"⚠️  发现重复网段: {subnet_str} (第{line_num+1}行)")
-                    continue
-                valid_subnets.add(subnet_str)
-                subnet_to_line[subnet_str] = line
-            except Exception as e:
-                invalid_subnet_count += 1
-                print(f"❌ 无效网段: {subnet_part} (第{line_num+1}行) - {e}")
-                continue
-        else:
-            # 无法识别的行，保留原样
-            comment_lines.append(line)
-    
-    print(f"📊 分析完成:")
-    print(f"  有效IP: {len(valid_ips)} 个")
-    print(f"  有效网段: {len(valid_subnets)} 个")
-    print(f"  重复项: {duplicate_count} 个")
-    print(f"  无效网段: {invalid_subnet_count} 个")
-    
-    # 合并所有要测试的IP（单个IP + 从网段生成的IP）
-    all_test_ips = set()
-    
-    # 添加单个IP
-    all_test_ips.update(valid_ips)
-    
-    # 从网段生成测试IP
-    subnet_generated_ips = {}
-    for subnet in valid_subnets:
-        if ':' in subnet and CONFIG["ENABLE_IPV6"]:
-            generated_ips = generate_ips_from_ipv6_subnet(subnet, 3)  # 每个IPv6网段测试3个IP
-        else:
-            generated_ips = generate_ips_from_subnet(subnet, 5)  # 每个IPv4网段测试5个IP
-        
-        subnet_generated_ips[subnet] = generated_ips
-        all_test_ips.update(generated_ips)
-        print(f"🔧 从网段 {subnet} 生成 {len(generated_ips)} 个测试IP")
-    
-    print(f"🚀 开始延迟测试 {len(all_test_ips)} 个IP...")
-    
-    # 测试所有IP的延迟
-    test_results = []
-    threads = min(CONFIG["THREADS"], 50)  # 减少线程数避免卡住
-    
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        future_to_ip = {executor.submit(ping_test, ip): ip for ip in all_test_ips}
-        with tqdm(total=len(all_test_ips), desc="延迟测试", unit="IP") as pbar:
-            for future in as_completed(future_to_ip):
-                try:
-                    result = future.result()
-                    test_results.append(result)
-                except Exception as e:
-                    print(f"\n⚠️  IP测试异常: {e}")
-                finally:
-                    pbar.update(1)
-    
-    # 筛选符合延迟要求的IP
-    rtt_min, rtt_max = map(int, CONFIG["RTT_RANGE"].split('~'))
-    loss_max = CONFIG["LOSS_MAX"]
-    
-    passed_ips = [
-        ip_data for ip_data in test_results
-        if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
-    ]
-    
-    passed_ip_set = {ip_data[0] for ip_data in passed_ips}
-    
-    print(f"✅ 延迟测试完成: 总数 {len(test_results)}, 通过 {len(passed_ips)}")
-    
-    # 分析网段通过率
-    passed_subnets = set()
-    for subnet, generated_ips in subnet_generated_ips.items():
-        passed_count = sum(1 for ip in generated_ips if ip in passed_ip_set)
-        total_count = len(generated_ips)
-        pass_rate = (passed_count / total_count) * 100 if total_count > 0 else 0
-        
-        print(f"📊 网段 {subnet}: {passed_count}/{total_count} 通过 ({pass_rate:.1f}%)")
-        
-        # 如果通过率超过50%，保留该网段
-        if pass_rate >= 50:
-            passed_subnets.add(subnet)
-        else:
-            print(f"🗑️  移除低质量网段: {subnet} (通过率: {pass_rate:.1f}%)")
-    
-    # 构建清理后的内容
-    cleaned_lines = []
-    
-    # 添加注释头
-    cleaned_lines.append(f"# 全面清理时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    cleaned_lines.append(f"# 清理前: {len(valid_ips)}个IP + {len(valid_subnets)}个网段")
-    cleaned_lines.append(f"# 清理后: {len(passed_ip_set)}个IP + {len(passed_subnets)}个网段")
-    cleaned_lines.append(f"# 移除: {duplicate_count}个重复 + {invalid_subnet_count}个无效网段")
-    cleaned_lines.append(f"# 延迟要求: {CONFIG['RTT_RANGE']}ms, 丢包率: {CONFIG['LOSS_MAX']}%")
-    cleaned_lines.append("")
-    
-    # 添加保留的注释行
-    for comment in comment_lines:
-        cleaned_lines.append(comment)
-    
-    if comment_lines:  # 如果有注释行，添加空行分隔
-        cleaned_lines.append("")
-    
-    # 添加通过的IP段
-    if passed_subnets:
-        cleaned_lines.append("# 通过的IP段:")
-        for subnet in sorted(passed_subnets):
-            cleaned_lines.append(subnet_to_line[subnet])
-        cleaned_lines.append("")
-    
-    # 添加通过的单个IP
-    if passed_ip_set:
-        cleaned_lines.append("# 通过的单个IP:")
-        for ip in sorted(passed_ip_set):
-            if ip in ip_to_line:
-                cleaned_lines.append(ip_to_line[ip])
-    
-    # 直接覆盖原文件
-    with open(local_file, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(cleaned_lines))
-    
-    print(f"\n🎉 全面清理完成!")
-    print(f"✅ 原始: {len(valid_ips)}个IP + {len(valid_subnets)}个网段")
-    print(f"✅ 清理后: {len(passed_ip_set)}个IP + {len(passed_subnets)}个网段")
-    print(f"✅ 移除重复: {duplicate_count}个")
-    print(f"✅ 移除无效网段: {invalid_subnet_count}个")
-    print(f"✅ 移除低质量IP和网段: {len(valid_ips) - len(passed_ip_set)}个IP + {len(valid_subnets) - len(passed_subnets)}个网段")
-    print(f"💾 结果已保存到: {local_file}")
-
-####################################################
 # IP地理位置查询函数
 ####################################################
 
@@ -423,25 +85,6 @@ def get_real_ip_country_code(ip):
     if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
         return ip_geo_cache[ip]
     
-    # 如果是IPv6地址，使用专门的IPv6查询或返回UN
-    if is_ipv6_address(ip):
-        # 尝试IPv6专用的地理位置查询
-        try:
-            # ipapi.co 支持IPv6
-            response = requests.get(f'https://ipapi.co/{ip}/json/', 
-                                  timeout=CONFIG["IP_GEO_API"]["timeout"], 
-                                  verify=False)
-            if response.status_code == 200:
-                data = response.json()
-                country_code = data.get('country_code')
-                if country_code:
-                    ip_geo_cache[ip] = country_code
-                    return country_code
-        except:
-            pass
-        return 'UN'  # IPv6直接返回未知
-    
-    # IPv4的查询逻辑保持不变
     apis = [
         {
             'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
@@ -496,20 +139,16 @@ def get_real_ip_country_code(ip):
     return 'UN'
 
 ####################################################
-# URL测试函数 - 修复IPv6支持
+# URL测试函数
 ####################################################
 
 def url_test(ip, url=None, timeout=None, retry=None):
     """
-    URL Test模式延迟检测 - 修复IPv6支持
+    URL Test模式延迟检测
+    支持HTTP和HTTPS，更好的错误处理和超时控制
     """
     if url is None:
-        # 根据IP类型选择测试URL
-        if is_ipv6_address(ip):
-            url = get_ipv6_test_url()
-        else:
-            url = CONFIG["URL_TEST_TARGET"]
-    
+        url = CONFIG["URL_TEST_TARGET"]
     if timeout is None:
         timeout = CONFIG["URL_TEST_TIMEOUT"]
     if retry is None:
@@ -535,46 +174,27 @@ def url_test(ip, url=None, timeout=None, retry=None):
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
                 
-                # 处理IPv6地址
-                if is_ipv6_address(ip):
-                    target_ip = f"[{ip}]"
-                    # 对于IPv6，使用host参数而不是修改Host头
-                    actual_hostname = ip
-                else:
-                    target_ip = ip
-                    actual_hostname = hostname
-                
                 conn = http.client.HTTPSConnection(
-                    target_ip, 
+                    ip, 
                     port=port, 
                     timeout=timeout,
                     context=context
                 )
             else:
                 # HTTP请求
-                if is_ipv6_address(ip):
-                    target_ip = f"[{ip}]"
-                    actual_hostname = ip
-                else:
-                    target_ip = ip
-                    actual_hostname = hostname
-                
                 conn = http.client.HTTPConnection(
-                    target_ip,
+                    ip,
                     port=port,
                     timeout=timeout
                 )
             
-            # 设置请求头 - 对于IPv6直接访问，不需要Host头
+            # 设置请求头
             headers = {
+                'Host': hostname,
                 'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
                 'Accept': '*/*',
                 'Connection': 'close'
             }
-            
-            # 只有非直接IP访问时才添加Host头
-            if actual_hostname != ip:
-                headers['Host'] = actual_hostname
             
             conn.request("GET", path, headers=headers)
             response = conn.getresponse()
@@ -598,7 +218,7 @@ def url_test(ip, url=None, timeout=None, retry=None):
             continue
         except ssl.SSLError:
             continue
-        except Exception as e:
+        except Exception:
             continue
         
         # 短暂间隔避免过于频繁
@@ -617,14 +237,10 @@ def url_test(ip, url=None, timeout=None, retry=None):
 
 def url_test_requests(ip, url=None, timeout=None, retry=None):
     """
-    备选的requests库版本URL测试 - 修复IPv6支持
+    备选的requests库版本URL测试
     """
     if url is None:
-        if is_ipv6_address(ip):
-            url = get_ipv6_test_url()
-        else:
-            url = CONFIG["URL_TEST_TARGET"]
-    
+        url = CONFIG["URL_TEST_TARGET"]
     if timeout is None:
         timeout = CONFIG["URL_TEST_TIMEOUT"]
     if retry is None:
@@ -641,35 +257,23 @@ def url_test_requests(ip, url=None, timeout=None, retry=None):
             start_time = time.time()
             
             # 构建使用IP直接访问的URL
-            if is_ipv6_address(ip):
-                # IPv6地址
-                if parsed_url.port:
-                    actual_url = f"{parsed_url.scheme}://[{ip}]:{parsed_url.port}{parsed_url.path}"
-                else:
-                    actual_url = f"{parsed_url.scheme}://[{ip}]{parsed_url.path}"
-                # 对于IPv6直接访问，不需要Host头
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
-                    'Accept': '*/*'
-                }
+            if parsed_url.port:
+                actual_url = f"{parsed_url.scheme}://{ip}:{parsed_url.port}{parsed_url.path}"
             else:
-                # IPv4地址
-                if parsed_url.port:
-                    actual_url = f"{parsed_url.scheme}://{ip}:{parsed_url.port}{parsed_url.path}"
-                else:
-                    actual_url = f"{parsed_url.scheme}://{ip}{parsed_url.path}"
-                headers = {
-                    'Host': parsed_url.hostname,
-                    'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
-                    'Accept': '*/*'
-                }
+                actual_url = f"{parsed_url.scheme}://{ip}{parsed_url.path}"
+            
+            headers = {
+                'Host': parsed_url.hostname,
+                'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
+                'Accept': '*/*'
+            }
             
             response = requests.get(
                 actual_url,
                 headers=headers,
                 timeout=timeout,
                 verify=False,
-                allow_redirects=False,  # 禁止重定向以避免问题
+                allow_redirects=True,
                 stream=True
             )
             
@@ -708,41 +312,27 @@ def smart_url_test(ip, url=None, timeout=None, retry=None):
     """
     智能URL测试 - 自动选择最佳测试方法
     """
-    # 对于IPv6，优先使用requests版本
-    if is_ipv6_address(ip):
+    # 先尝试http.client版本（更快）
+    try:
+        return url_test(ip, url, timeout, retry)
+    except Exception:
+        # 回退到requests版本
         return url_test_requests(ip, url, timeout, retry)
-    else:
-        # 先尝试http.client版本（更快）
-        try:
-            return url_test(ip, url, timeout, retry)
-        except Exception:
-            # 回退到requests版本
-            return url_test_requests(ip, url, timeout, retry)
 
 ####################################################
-# 其他测试函数 - 修复IPv6支持
+# 其他测试函数
 ####################################################
 
 def custom_ping(ip):
-    """自定义Ping测试 - 修复IPv6支持"""
+    """自定义Ping测试"""
     target = urlparse(CONFIG["PING_TARGET"]).netloc or CONFIG["PING_TARGET"]
     count = CONFIG["PING_COUNT"]
     timeout = CONFIG["PING_TIMEOUT"]
-    
     try:
-        if is_ipv6_address(ip):
-            # IPv6 ping命令
-            if os.name == 'nt':  # Windows
-                cmd = f"ping -n {count} -w {timeout*1000} {target}"
-            else:  # Linux/Mac
-                cmd = f"ping6 -c {count} -W {timeout} {target}"
+        if os.name == 'nt':
+            cmd = f"ping -n {count} -w {timeout*1000} {target}"
         else:
-            # IPv4 ping命令
-            if os.name == 'nt':
-                cmd = f"ping -n {count} -w {timeout*1000} {target}"
-            else:
-                cmd = f"ping -c {count} -W {timeout} -I {ip} {target}"
-                
+            cmd = f"ping -c {count} -W {timeout} -I {ip} {target}"
         result = subprocess.run(
             cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout + 2
         )
@@ -772,69 +362,38 @@ def custom_ping(ip):
     except subprocess.TimeoutExpired:
         return float('inf'), 100.0
     except Exception as e:
+        print(f"Ping测试异常: {e}")
         return float('inf'), 100.0
 
 def tcp_ping(ip, port, timeout=2):
-    """TCP Ping测试 - 修复IPv6支持"""
+    """TCP Ping测试"""
     retry = CONFIG["TCP_RETRY"]
     success_count = 0
     total_rtt = 0
-    
-    # 处理IPv6地址
-    if is_ipv6_address(ip):
-        target_ip = format_ipv6_for_socket(ip)
-        # 对于IPv6，增加超时时间
-        timeout = max(timeout, 3)
-    else:
-        target_ip = ip
-        
     for _ in range(retry):
         start = time.time()
         try:
-            # 设置socket选项以支持IPv6
-            if is_ipv6_address(ip):
-                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-            else:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            sock.connect((target_ip, port))
-            rtt = (time.time() - start) * 1000
-            total_rtt += rtt
-            success_count += 1
-            sock.close()
+            with socket.create_connection((ip, port), timeout=timeout) as sock:
+                rtt = (time.time() - start) * 1000
+                total_rtt += rtt
+                success_count += 1
         except:
             pass
         time.sleep(0.1)
-    
     loss_rate = 100 - (success_count / retry * 100)
     avg_rtt = total_rtt / success_count if success_count > 0 else float('inf')
     return avg_rtt, loss_rate
 
 def speed_test(ip):
-    """速度测试 - 修复IPv6支持"""
+    """速度测试"""
     url = CONFIG["SPEED_URL"]
     timeout = CONFIG["SPEED_TIMEOUT"]
-    
-    # 对于IPv6，减少测试数据量
-    if is_ipv6_address(ip):
-        url = url.replace('10000000', '2000000')  # 减少到2MB
-        timeout = max(timeout, 8)  # 增加超时时间
-    
     try:
         parsed_url = urlparse(url)
         host = parsed_url.hostname
-        
-        # 处理IPv6地址
-        if is_ipv6_address(ip):
-            actual_url = f"https://[{ip}]{parsed_url.path}"
-            headers = {'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)'}
-        else:
-            actual_url = f"https://{ip}{parsed_url.path}"
-            headers = {'Host': host, 'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)'}
-            
         start_time = time.time()
         response = requests.get(
-            actual_url, headers=headers, timeout=timeout, verify=False, stream=True
+            url, headers={'Host': host}, timeout=timeout, verify=False, stream=True
         )
         total_bytes = 0
         for chunk in response.iter_content(chunk_size=8192):
@@ -856,251 +415,41 @@ def init_env():
     for key, value in CONFIG.items():
         os.environ[key] = str(value)
 
-def analyze_local_ip_pool():
-    """
-    分析本地IP池文件，识别IPv4/IPv6 IP段和IP列表
-    """
-    local_file = CONFIG["LOCAL_IP_POOL_FILE"]
-    if not os.path.exists(local_file):
-        print(f"❌ 未找到本地IP池文件: {local_file}")
-        return [], [], [], []
-    
-    print(f"🔍 分析本地IP池文件: {local_file}")
-    
-    ipv4_ips = []
-    ipv6_ips = []
-    ipv4_subnets = []
-    ipv6_subnets = []
-    
-    try:
-        with open(local_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        for line_num, line in enumerate(lines, 1):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            
-            # 尝试提取IP
-            ip = extract_ip_from_line(line)
-            if ip:
-                if is_ipv6_address(ip):
-                    ipv6_ips.append(ip)
-                else:
-                    ipv4_ips.append(ip)
-                continue
-            
-            # 尝试识别IP段
-            if '/' in line:
-                subnet_part = line.split('#')[0].strip() if '#' in line else line
-                try:
-                    network = ipaddress.ip_network(subnet_part, strict=False)
-                    if network.version == 4:
-                        ipv4_subnets.append(str(network))
-                    else:
-                        ipv6_subnets.append(str(network))
-                except:
-                    # 不是有效的IP段
-                    pass
-        
-        print(f"✅ 分析完成:")
-        print(f"   IPv4单IP: {len(ipv4_ips)} 个")
-        print(f"   IPv6单IP: {len(ipv6_ips)} 个") 
-        print(f"   IPv4网段: {len(ipv4_subnets)} 个")
-        print(f"   IPv6网段: {len(ipv6_subnets)} 个")
-        
-        return ipv4_ips, ipv6_ips, ipv4_subnets, ipv6_subnets
-        
-    except Exception as e:
-        print(f"🚨 分析本地IP池文件失败: {e}")
-        return [], [], [], []
-
-def generate_ips_from_local_pool():
-    """
-    从本地IP池生成测试IP列表 - 修复IPv6生成问题
-    """
-    ipv4_ips, ipv6_ips, ipv4_subnets, ipv6_subnets = analyze_local_ip_pool()
-    
-    all_ips = []
-    
-    # 添加单IP
-    all_ips.extend(ipv4_ips)
-    if CONFIG["ENABLE_IPV6"]:
-        all_ips.extend(ipv6_ips)
-    
-    # 从IPv4网段生成IP
-    ipv4_from_subnets = []
-    for subnet in ipv4_subnets:
-        ips = generate_ips_from_subnet(subnet, 3)  # 每个网段生成3个IP
-        ipv4_from_subnets.extend(ips)
-    
-    all_ips.extend(ipv4_from_subnets)
-    
-    # 从IPv6网段生成IP（如果启用）- 使用专门的IPv6生成函数
-    if CONFIG["ENABLE_IPV6"] and ipv6_subnets:
-        ipv6_from_subnets = []
-        for subnet in ipv6_subnets:
-            ips = generate_ips_from_ipv6_subnet(subnet, 2)  # 每个IPv6网段生成2个IP
-            ipv6_from_subnets.extend(ips)
-        all_ips.extend(ipv6_from_subnets)
-    
-    # 去重
-    unique_ips = list(set(all_ips))
-    
-    print(f"📊 生成的测试IP统计:")
-    print(f"   IPv4单IP: {len(ipv4_ips)} 个")
-    print(f"   IPv6单IP: {len(ipv6_ips)} 个")
-    print(f"   IPv4网段生成: {len(ipv4_from_subnets)} 个")
-    if CONFIG["ENABLE_IPV6"]:
-        print(f"   IPv6网段生成: {len(ipv6_from_subnets) if 'ipv6_from_subnets' in locals() else 0} 个")
-    print(f"   总计唯一IP: {len(unique_ips)} 个")
-    
-    return unique_ips
-
-def fetch_cloudflare_ip_ranges():
-    """
-    从Cloudflare URL获取IP段
-    """
-    urls = [CONFIG["CLOUDFLARE_IPS_URL"]]
-    if CONFIG["ENABLE_IPV6"]:
-        urls.append(CONFIG["CLOUDFLARE_IPS_V6_URL"])
-    
-    all_subnets = []
-    for url in urls:
+def fetch_ip_ranges():
+    """获取IP段"""
+    custom_file = CONFIG["CUSTOM_IPS_FILE"]
+    if custom_file and os.path.exists(custom_file):
+        print(f"🔧 使用自定义IP池文件: {custom_file}")
         try:
-            print(f"🌐 从Cloudflare获取IP段: {url}")
-            res = requests.get(url, timeout=10, verify=False)
-            if res.status_code == 200:
-                subnets = res.text.splitlines()
-                subnets = [subnet.strip() for subnet in subnets if subnet.strip()]
-                print(f"✅ 从Cloudflare获取到 {len(subnets)} 个IP段")
-                all_subnets.extend(subnets)
-            else:
-                print(f"❌ Cloudflare返回状态码: {res.status_code}")
+            with open(custom_file, 'r') as f:
+                return [line.strip() for line in f.readlines() if line.strip()]
         except Exception as e:
-            print(f"🚨 获取Cloudflare IP段失败: {e}")
-    
-    return all_subnets
+            print(f"🚨 读取自定义IP池失败: {e}")
+    url = CONFIG["CLOUDFLARE_IPS_URL"]
+    try:
+        res = requests.get(url, timeout=10, verify=False)
+        return res.text.splitlines()
+    except Exception as e:
+        print(f"🚨 获取Cloudflare IP段失败: {e}")
+    return []
 
 def generate_random_ip(subnet):
     """根据CIDR生成子网内的随机合法IP"""
     try:
         network = ipaddress.ip_network(subnet, strict=False)
-        if network.version == 6:
-            # IPv6生成策略
-            network_int = int(network.network_address)
-            broadcast_int = int(network.broadcast_address)
-            # 对于IPv6，生成更少的IP
-            random_ip_int = random.randint(network_int, broadcast_int)
-            random_ip = ipaddress.IPv6Address(random_ip_int)
-            
-            # 确保IP在子网内
-            if random_ip in network:
-                return str(random_ip)
-            else:
-                # 如果不在子网内，使用第一个可用地址
-                return str(list(network.hosts())[0]) if network.num_addresses > 1 else str(network.network_address)
-        else:
-            # IPv4生成策略
-            network_addr = int(network.network_address)
-            broadcast_addr = int(network.broadcast_address)
-            first_ip = network_addr + 1
-            last_ip = broadcast_addr - 1
-            if first_ip <= last_ip:
-                random_ip_int = random.randint(first_ip, last_ip)
-                return str(ipaddress.IPv4Address(random_ip_int))
-            else:
-                # 如果子网太小，使用网络地址
-                return str(network.network_address)
+        network_addr = int(network.network_address)
+        broadcast_addr = int(network.broadcast_address)
+        first_ip = network_addr + 1
+        last_ip = broadcast_addr - 1
+        random_ip_int = random.randint(first_ip, last_ip)
+        return str(ipaddress.IPv4Address(random_ip_int))
     except Exception as e:
-        print(f"⚠️ 生成随机IP时出错 {subnet}: {e}")
-        # 备用生成方法
-        if ':' in subnet:  # IPv6
-            return "2001:db8::1"  # 示例IPv6
-        else:  # IPv4
-            base_ip = subnet.split('/')[0]
-            parts = base_ip.split('.')
-            while len(parts) < 4:
-                parts.append(str(random.randint(0, 255)))
-            parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
-            return ".".join(parts)
-
-def generate_cloudflare_ip_pool():
-    """
-    生成Cloudflare IP池
-    """
-    subnets = fetch_cloudflare_ip_ranges()
-    if not subnets:
-        return []
-    
-    ip_pool_size = CONFIG["IP_POOL_SIZE"]
-    full_ip_pool = set()
-    
-    print(f"🔧 正在生成 {ip_pool_size} 个Cloudflare随机IP...")
-    
-    # 分离IPv4和IPv6子网
-    ipv4_subnets = [s for s in subnets if ':' not in s]
-    ipv6_subnets = [s for s in subnets if ':' in s]
-    
-    print(f"📊 子网统计: IPv4: {len(ipv4_subnets)}个, IPv6: {len(ipv6_subnets)}个")
-    
-    with tqdm(total=ip_pool_size, desc="生成Cloudflare IP", unit="IP") as pbar:
-        while len(full_ip_pool) < ip_pool_size:
-            # 根据配置决定生成IPv4还是IPv6
-            if CONFIG["ENABLE_IPV6"] and ipv6_subnets and random.random() < 0.3:  # 30%概率生成IPv6
-                subnet = random.choice(ipv6_subnets)
-            else:
-                subnet = random.choice(ipv4_subnets)
-            
-            ip = generate_random_ip(subnet)
-            if ip not in full_ip_pool:
-                full_ip_pool.add(ip)
-                pbar.update(1)
-    
-    ip_list = list(full_ip_pool)
-    
-    # 统计生成的IP类型
-    ipv4_count = sum(1 for ip in ip_list if not is_ipv6_address(ip))
-    ipv6_count = sum(1 for ip in ip_list if is_ipv6_address(ip))
-    
-    print(f"✅ 成功生成 {len(ip_list)} 个Cloudflare随机IP")
-    print(f"📊 生成IP类型: IPv4: {ipv4_count}个, IPv6: {ipv6_count}个")
-    
-    return ip_list
-
-def get_test_ip_pool():
-    """
-    根据配置获取测试IP池
-    """
-    if CONFIG["LOCAL_IP_POOL"]:
-        # 使用本地IP池
-        ip_list = generate_ips_from_local_pool()
-        if not ip_list:
-            print("❌ 无法从本地IP池生成IP列表，程序终止")
-            exit(1)
-        
-        # 如果IP数量超过测试数量，随机选择
-        test_ip_count = min(CONFIG["TEST_IP_COUNT"], len(ip_list))
-        if len(ip_list) > test_ip_count:
-            test_ips = random.sample(ip_list, test_ip_count)
-            print(f"🔧 从本地IP池随机选择 {test_ip_count} 个IP进行测试")
-        else:
-            test_ips = ip_list
-            print(f"🔧 使用全部 {len(ip_list)} 个本地IP进行测试")
-        
-        return test_ips
-    else:
-        # 使用Cloudflare IP池
-        ip_list = generate_cloudflare_ip_pool()
-        if not ip_list:
-            print("❌ 无法生成Cloudflare IP池，程序终止")
-            exit(1)
-        
-        test_ip_count = min(CONFIG["TEST_IP_COUNT"], len(ip_list))
-        test_ips = random.sample(ip_list, test_ip_count)
-        print(f"🔧 从Cloudflare IP池选择 {test_ip_count} 个IP进行测试")
-        
-        return test_ips
+        base_ip = subnet.split('/')[0]
+        parts = base_ip.split('.')
+        while len(parts) < 4:
+            parts.append(str(random.randint(0, 255)))
+        parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
+        return ".".join(parts)
 
 def ping_test(ip):
     """延迟测试入口 - 支持三种模式"""
@@ -1131,56 +480,25 @@ def enhance_ip_with_country_info(ip_list):
     enhanced_ips = []
     
     print("🌍 正在检测IP真实地理位置...")
-    
-    # 对于IPv6，减少并发数
-    threads = min(CONFIG["THREADS"], 20) if any(is_ipv6_address(ip_data[0]) for ip_data in ip_list) else CONFIG["THREADS"]
-    
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        future_to_ip = {}
+    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
         for ip_data in ip_list:
             ip = ip_data[0]
-            future = executor.submit(get_real_ip_country_code, ip)
-            future_to_ip[future] = ip_data
-        
-        with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
-            for future in as_completed(future_to_ip):
-                ip_data = future_to_ip[future]
-                try:
-                    country_code = future.result()
-                    ip = ip_data[0]
-                    rtt = ip_data[1]
-                    loss = ip_data[2]
-                    speed = ip_data[3] if len(ip_data) > 3 else 0
-                    
-                    enhanced_ip = {
-                        'ip': ip,
-                        'rtt': rtt,
-                        'loss': loss,
-                        'speed': speed,
-                        'countryCode': country_code,
-                        'isp': "Cloudflare",
-                        'is_ipv6': is_ipv6_address(ip)
-                    }
-                    enhanced_ips.append(enhanced_ip)
-                except Exception:
-                    # 如果查询失败，使用默认值
-                    ip = ip_data[0]
-                    rtt = ip_data[1]
-                    loss = ip_data[2]
-                    speed = ip_data[3] if len(ip_data) > 3 else 0
-                    
-                    enhanced_ip = {
-                        'ip': ip,
-                        'rtt': rtt,
-                        'loss': loss,
-                        'speed': speed,
-                        'countryCode': 'UN',
-                        'isp': "Cloudflare",
-                        'is_ipv6': is_ipv6_address(ip)
-                    }
-                    enhanced_ips.append(enhanced_ip)
-                finally:
-                    pbar.update(1)
+            rtt = ip_data[1]
+            loss = ip_data[2]
+            speed = ip_data[3] if len(ip_data) > 3 else 0
+            
+            country_code = get_real_ip_country_code(ip)
+            
+            enhanced_ip = {
+                'ip': ip,
+                'rtt': rtt,
+                'loss': loss,
+                'speed': speed,
+                'countryCode': country_code,
+                'isp': "Cloudflare"
+            }
+            enhanced_ips.append(enhanced_ip)
+            pbar.update(1)
     
     return enhanced_ips
 
@@ -1198,12 +516,7 @@ def format_ip_output(ip_data, port=None):
     country_code = ip_data.get('countryCode', 'UN')
     flag = CONFIG["COUNTRY_FLAGS"].get(country_code, '🏴')
     
-    ip = ip_data['ip']
-    # 如果是IPv6且包含方括号，移除方括号
-    if ip.startswith('[') and ip.endswith(']'):
-        ip = ip[1:-1]
-    
-    return f"{ip}:{port}#{flag} {country_code}"
+    return f"{ip_data['ip']}:{port}#{flag} {country_code}"
 
 def format_ip_list_for_display(ip_list, port=None):
     """
@@ -1241,7 +554,6 @@ def validate_test_urls():
     """
     print("🔍 验证测试URL可用性...")
     
-    # 测试IPv4 URL
     for test_url in CONFIG["BACKUP_TEST_URLS"]:
         try:
             start_time = time.time()
@@ -1263,24 +575,8 @@ def validate_test_urls():
 # 主逻辑
 ####################################################
 if __name__ == "__main__":
-    import sys
-    
-    # 检查是否要执行清理功能
-    if len(sys.argv) > 1 and sys.argv[1] == "clean":
-        clean_local_ip_pool_comprehensive()
-        sys.exit(0)
-    
     # 0. 初始化环境
     init_env()
-    
-    # 检查IPv6支持并给出警告
-    if CONFIG["ENABLE_IPV6"]:
-        print("⚠️  IPv6支持已开启，请注意:")
-        print("   - 测试速度可能较慢")
-        print("   - 部分网络环境可能不支持IPv6")
-        print("   - 如果卡住，请使用 Ctrl+C 中断并关闭IPv6支持")
-        print("   - 建议首次使用时设置 TEST_IP_COUNT = 50 进行小规模测试")
-        print()
     
     # 1. 验证并选择最佳测试URL
     best_url = validate_test_urls()
@@ -1294,8 +590,6 @@ if __name__ == "__main__":
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称")
     print(f"地理位置API: 启用")
-    print(f"本地IP池: {'开启' if CONFIG['LOCAL_IP_POOL'] else '关闭'}")
-    print(f"IPv6支持: {'开启' if CONFIG['ENABLE_IPV6'] else '关闭'}")
     
     mode = CONFIG["MODE"]
     if mode == "PING":
@@ -1313,27 +607,46 @@ if __name__ == "__main__":
     print(f"延迟范围: {CONFIG['RTT_RANGE']}ms")
     print(f"最大丢包: {CONFIG['LOSS_MAX']}%")
     print(f"并发线程: {CONFIG['THREADS']}")
+    print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
     print(f"测试IP数: {CONFIG['TEST_IP_COUNT']}")
-    
-    if CONFIG["LOCAL_IP_POOL"]:
-        print(f"IP源: 本地IP池 ({CONFIG['LOCAL_IP_POOL_FILE']})")
+    custom_file = CONFIG["CUSTOM_IPS_FILE"]
+    if custom_file:
+        print(f"自定义IP池: {custom_file}")
     else:
-        print(f"IP源: Cloudflare URL ({CONFIG['CLOUDFLARE_IPS_URL']})")
-        print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
-    
+        print(f"Cloudflare IP源: {CONFIG['CLOUDFLARE_IPS_URL']}")
     print(f"测速URL: {CONFIG['SPEED_URL']}")
-    print("="*60)
-    print("💡 提示: 使用 'python cf_ip_tester.py clean' 清理本地IP池")
     print("="*60 + "\n")
 
-    # 3. 获取测试IP池
-    test_ip_pool = get_test_ip_pool()
-    print(f"🔧 最终测试IP数量: {len(test_ip_pool)}")
-
-    # 统计IPv4/IPv6数量
-    ipv4_count = sum(1 for ip in test_ip_pool if not is_ipv6_address(ip))
-    ipv6_count = sum(1 for ip in test_ip_pool if is_ipv6_address(ip))
-    print(f"📊 IP类型统计: IPv4: {ipv4_count}个, IPv6: {ipv6_count}个")
+    # 3. 获取IP段并生成随机IP池
+    subnets = fetch_ip_ranges()
+    if not subnets:
+        print("❌ 无法获取IP段，程序终止")
+        exit(1)
+    
+    source_type = "自定义" if custom_file and os.path.exists(custom_file) else "Cloudflare"
+    print(f"✅ 获取到 {len(subnets)} 个{source_type} IP段")
+    
+    ip_pool_size = CONFIG["IP_POOL_SIZE"]
+    test_ip_count = CONFIG["TEST_IP_COUNT"]
+    full_ip_pool = set()
+    
+    print(f"🔧 正在生成 {ip_pool_size} 个随机IP的大池...")
+    with tqdm(total=ip_pool_size, desc="生成IP大池", unit="IP") as pbar:
+        while len(full_ip_pool) < ip_pool_size:
+            subnet = random.choice(subnets)
+            ip = generate_random_ip(subnet)
+            if ip not in full_ip_pool:
+                full_ip_pool.add(ip)
+                pbar.update(1)
+    
+    print(f"✅ 成功生成 {len(full_ip_pool)} 个随机IP的大池")
+    
+    if test_ip_count > len(full_ip_pool):
+        print(f"⚠️ 警告: 测试IP数量({test_ip_count})大于IP池大小({len(full_ip_pool)})，使用全部IP")
+        test_ip_count = len(full_ip_pool)
+    
+    test_ip_pool = random.sample(list(full_ip_pool), test_ip_count)
+    print(f"🔧 从大池中随机选择 {len(test_ip_pool)} 个IP进行测试")
 
     # 4. 第一阶段：延迟测试（筛选IP）
     ping_results = []
@@ -1344,13 +657,7 @@ if __name__ == "__main__":
     }
     progress_desc = mode_display.get(mode, "🚀 延迟测试进度")
     
-    # 根据IPv6情况调整线程数
-    threads = CONFIG["THREADS"]
-    if ipv6_count > 0:
-        threads = min(threads, 50)  # IPv6测试减少线程数
-        print("🔧 检测到IPv6地址，已自动降低并发线程数")
-    
-    with ThreadPoolExecutor(max_workers=threads) as executor:
+    with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
         future_to_ip = {executor.submit(ping_test, ip): ip for ip in test_ip_pool}
         with tqdm(
             total=len(test_ip_pool),
@@ -1380,7 +687,7 @@ if __name__ == "__main__":
         exit(1)
     
     full_results = []
-    with ThreadPoolExecutor(max_workers=threads) as executor:
+    with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
         future_to_ip = {executor.submit(full_test, ip_data): ip_data for ip_data in passed_ips}
         with tqdm(
             total=len(passed_ips),
@@ -1415,11 +722,9 @@ if __name__ == "__main__":
         f.write("\n".join([ip[0] for ip in passed_ips]))
     
     with open('results/full_results.csv', 'w') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源,IP类型\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP\n")
         for ip_data in enhanced_results:
-            source = "本地IP池" if CONFIG["LOCAL_IP_POOL"] else "Cloudflare"
-            ip_type = "IPv6" if ip_data.get('is_ipv6') else "IPv4"
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{source},{ip_type}\n")
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']}\n")
     
     # 所有输出文件都使用统一格式
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
@@ -1427,37 +732,21 @@ if __name__ == "__main__":
         f.write("\n".join(formatted_lines))
     
     with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源,IP类型\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP\n")
         for ip_data in sorted_ips:
-            source = "本地IP池" if CONFIG["LOCAL_IP_POOL"] else "Cloudflare"
-            ip_type = "IPv6" if ip_data.get('is_ipv6') else "IPv4"
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{source},{ip_type}\n")
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']}\n")
 
     # 9. 按国家分组统计
     country_stats = {}
-    ip_type_stats = {'IPv4': 0, 'IPv6': 0}
-    
     for ip_data in enhanced_results:
         country = ip_data['countryCode']
-        ip_type = "IPv6" if ip_data.get('is_ipv6') else "IPv4"
-        
         if country not in country_stats:
             country_stats[country] = {
                 'count': 0,
-                'ipv4_count': 0,
-                'ipv6_count': 0,
                 'avg_rtt': 0,
                 'avg_speed': 0
             }
-        
         country_stats[country]['count'] += 1
-        if ip_type == "IPv4":
-            country_stats[country]['ipv4_count'] += 1
-            ip_type_stats['IPv4'] += 1
-        else:
-            country_stats[country]['ipv6_count'] += 1
-            ip_type_stats['IPv6'] += 1
-            
         country_stats[country]['avg_rtt'] += ip_data['rtt']
         country_stats[country]['avg_speed'] += ip_data['speed']
     
@@ -1467,38 +756,31 @@ if __name__ == "__main__":
             country_stats[country]['avg_speed'] /= country_stats[country]['count']
 
     with open('results/country_stats.csv', 'w', encoding='utf-8') as f:
-        f.write("国家代码,IP数量,IPv4数量,IPv6数量,平均延迟(ms),平均速度(Mbps),来源\n")
+        f.write("国家代码,IP数量,平均延迟(ms),平均速度(Mbps)\n")
         for country, stats in country_stats.items():
-            source = "本地IP池" if CONFIG["LOCAL_IP_POOL"] else "Cloudflare"
-            f.write(f"{country},{stats['count']},{stats['ipv4_count']},{stats['ipv6_count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f},{source}\n")
+            f.write(f"{country},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f}\n")
 
     # 10. 显示统计结果
     print("\n" + "="*60)
     print(f"{'🔥 测试结果统计':^60}")
     print("="*60)
+    print(f"IP池大小: {ip_pool_size}")
     print(f"实际测试IP数: {len(ping_results)}")
     print(f"通过延迟测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
-    print(f"IP来源: {'本地IP池' if CONFIG['LOCAL_IP_POOL'] else 'Cloudflare URL'}")
-    print(f"IP类型分布: IPv4: {ip_type_stats['IPv4']}个, IPv6: {ip_type_stats['IPv6']}个")
-    
-    if not CONFIG["LOCAL_IP_POOL"]:
-        print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
     
     print(f"\n🌍 国家分布 (基于真实地理位置API):")
     for country, stats in sorted(country_stats.items(), key=lambda x: x[1]['count'], reverse=True):
         flag = CONFIG["COUNTRY_FLAGS"].get(country, '🏴')
-        ip_type_info = f" (IPv4:{stats['ipv4_count']}, IPv6:{stats['ipv6_count']})" if stats['ipv6_count'] > 0 else ""
-        print(f"  {flag} {country}: {stats['count']}个IP{ip_type_info}, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
+        print(f"  {flag} {country}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
     
     if sorted_ips:
         print(f"\n🏆【最佳IP TOP10】")
         formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
         for i, formatted_ip in enumerate(formatted_top_ips, 1):
             ip_data = sorted_ips[i-1]
-            ip_type = " [IPv6]" if ip_data.get('is_ipv6') else ""
-            print(f"{i:2d}. {formatted_ip}{ip_type} (延迟:{ip_data['rtt']:.1f}ms, 速度:{ip_data['speed']:.1f}Mbps)")
+            print(f"{i:2d}. {formatted_ip} (延迟:{ip_data['rtt']:.1f}ms, 速度:{ip_data['speed']:.1f}Mbps)")
         
         print(f"\n📋【全部精选IP】")
         formatted_all_ips = format_ip_list_for_display(sorted_ips)
