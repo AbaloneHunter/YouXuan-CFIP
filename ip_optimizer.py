@@ -31,8 +31,8 @@ CONFIG = {
     "RTT_RANGE": "0~800",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
     "THREADS": 100,  # 并发线程数
-    "IP_POOL_SIZE": 50000,  # IP池总大小
-    "TEST_IP_COUNT": 800,  # 实际测试IP数量
+    "IP_POOL_SIZE": 10000,  # IP池总大小
+    "TEST_IP_COUNT": 1000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/13335/ipv4-aggregated.txt",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
