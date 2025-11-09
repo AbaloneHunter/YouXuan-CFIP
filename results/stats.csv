@@ -1,7 +1,9 @@
 国家代码,来源,IP数量,平均延迟(ms),平均速度(Mbps)
-US,cloudflare,131,39.94,26.22
-CA,cloudflare,20,31.23,20.74
-JP,backup,1,217.38,19.01
-CR,cloudflare,17,44.11,27.24
-US,backup,1,18.48,14.84
-HK,backup,1,320.84,15.49
+US,cloudflare,130,15.16,25.02
+CA,cloudflare,21,13.01,20.28
+CR,cloudflare,14,11.54,24.54
+HK,backup,1,434.94,22.22
+GB,cloudflare,1,14.62,20.18
+US,backup,1,69.37,18.77
+DE,backup,1,181.98,19.01
+Multacom,backup,1,130.39,17.56
