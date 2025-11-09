@@ -21,8 +21,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ####################################################
 CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：PING/TCP/URL_TEST
-    "PING_TARGET": "https://www.gstatic.com/generate_204",  # Ping测试目标
-    "URL_TEST_TARGET": "https://www.gstatic.com/generate_204",  # URL测试目标
+    "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
+    "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 2,  # URL测试重试次数
     "PING_COUNT": 5,  # Ping次数
@@ -42,9 +42,9 @@ CONFIG = {
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
-        "https://www.gstatic.com/generate_204",
-        "https://cp.cloudflare.com/",
-        "https://www.cloudflare.com/favicon.ico"
+        "http://www.gstatic.com/generate_204",
+        "http://cp.cloudflare.com/",
+        "http://www.cloudflare.com/favicon.ico"
     ],
     
     # 国家代码到国旗的映射
