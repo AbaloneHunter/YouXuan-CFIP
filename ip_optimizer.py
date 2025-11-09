@@ -36,7 +36,7 @@ CONFIG = {
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CLOUDFLARE_IPS_V6_URL": "https://www.cloudflare.com/ips-v6",  # 新增IPv6 IP段URL
-    "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
+    "LOCAL_IP_POOL": False,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
     "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
     "ENABLE_IPV6": True,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
     "TCP_RETRY": 2,  # TCP重试次数
