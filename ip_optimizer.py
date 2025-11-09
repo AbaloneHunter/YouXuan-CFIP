@@ -30,15 +30,15 @@ CONFIG = {
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~400",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
-    "THREADS": 400,  # 并发线程数 - 减少以避免IPv6连接问题
+    "THREADS": 100,  # 并发线程数 - 减少以避免IPv6连接问题
     "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 1000,  # 实际测试IP数量 - 减少IPv6测试数量
-    "TOP_IPS_LIMIT": 100,  # 精选IP数量
+    "TEST_IP_COUNT": 200,  # 实际测试IP数量 - 减少IPv6测试数量
+    "TOP_IPS_LIMIT": 50,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CLOUDFLARE_IPS_V6_URL": "https://www.cloudflare.com/ips-v6",  # 新增IPv6 IP段URL
     "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
     "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
-    "ENABLE_IPV6": True,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
+    "ENABLE_IPV6": False,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 8,  # 测速超时时间 - 为IPv6增加时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=5000000",  # 测速URL - 减少数据量
@@ -90,7 +90,8 @@ ip_geo_cache = {}
 def is_ipv6_address(ip_str):
     """检查是否为IPv6地址"""
     try:
-        return ':' in ip_str and ipaddress.IPv6Address(ip_str)
+        ipaddress.IPv6Address(ip_str)
+        return True
     except:
         return False
 
@@ -191,7 +192,39 @@ def generate_ips_from_subnet(subnet, count=10):
                 ips = available_ips
         
         return [str(ip) for ip in ips]
-    except:
+    except Exception as e:
+        print(f"⚠️ 生成IP时出错 {subnet}: {e}")
+        return []
+
+def generate_ips_from_ipv6_subnet(subnet, count=5):
+    """专门为IPv6网段生成IP（修复版本）"""
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+        print(f"🔧 处理IPv6网段: {subnet}, 总地址数: {network.num_addresses}")
+        
+        ips = []
+        
+        # 对于IPv6，我们不需要排除网络和广播地址，直接生成随机地址
+        if network.num_addresses > 1:
+            # 生成随机IP地址
+            for _ in range(count):
+                # 生成网络内的随机地址
+                network_int = int(network.network_address)
+                broadcast_int = int(network.broadcast_address)
+                
+                # 确保在有效范围内
+                random_ip_int = random.randint(network_int, broadcast_int)
+                random_ip = ipaddress.IPv6Address(random_ip_int)
+                
+                # 确保IP在子网内
+                if random_ip in network:
+                    ips.append(str(random_ip))
+        
+        print(f"✅ 从 {subnet} 生成 {len(ips)} 个IPv6地址")
+        return ips
+        
+    except Exception as e:
+        print(f"❌ 生成IPv6 IP时出错 {subnet}: {e}")
         return []
 
 ####################################################
@@ -720,7 +753,7 @@ def clean_local_ip_pool():
     with open(local_file, 'w', encoding='utf-8') as f:
         # 写入文件头注释
         f.write(f"# 清理时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"# 原始IP数: {len(unique_ips)}, 清理后: {len(cleaned_ips)}\n")
+        f.write(f"# 原始IP数: {len(unique_ips)}, 清理后: {len(cleaned_ips)}n")
         f.write(f"# 延迟范围: {CONFIG['RTT_RANGE']}ms, 最大丢包: {CONFIG['LOSS_MAX']}%\n")
         f.write(f"# 重复IP已移除: {duplicate_count}个\n")
         f.write(f"# 未通过延迟测试: {len(unique_ips) - len(cleaned_ips)}个\n\n")
@@ -788,8 +821,10 @@ def analyze_local_ip_pool():
                         ipv4_subnets.append(str(network))
                     else:
                         ipv6_subnets.append(str(network))
-                except:
+                        print(f"✅ 发现IPv6网段: {subnet_part}")
+                except Exception as e:
                     # 不是有效的IP段
+                    print(f"⚠️ 无效的IP段: {subnet_part} - {e}")
                     pass
         
         print(f"✅ 分析完成:")
@@ -806,7 +841,7 @@ def analyze_local_ip_pool():
 
 def generate_ips_from_local_pool():
     """
-    从本地IP池生成测试IP列表
+    从本地IP池生成测试IP列表 - 修复IPv6生成问题
     """
     ipv4_ips, ipv6_ips, ipv4_subnets, ipv6_subnets = analyze_local_ip_pool()
     
@@ -816,22 +851,28 @@ def generate_ips_from_local_pool():
     all_ips.extend(ipv4_ips)
     if CONFIG["ENABLE_IPV6"]:
         all_ips.extend(ipv6_ips)
+        print(f"✅ 添加 {len(ipv6_ips)} 个IPv6单IP")
     
     # 从IPv4网段生成IP
     ipv4_from_subnets = []
     for subnet in ipv4_subnets:
         ips = generate_ips_from_subnet(subnet, 3)  # 每个网段生成3个IP
         ipv4_from_subnets.extend(ips)
+        print(f"✅ 从IPv4网段 {subnet} 生成 {len(ips)} 个IP")
     
     all_ips.extend(ipv4_from_subnets)
     
-    # 从IPv6网段生成IP（如果启用）
-    if CONFIG["ENABLE_IPV6"]:
+    # 从IPv6网段生成IP（如果启用）- 使用专门的IPv6生成函数
+    if CONFIG["ENABLE_IPV6"] and ipv6_subnets:
         ipv6_from_subnets = []
         for subnet in ipv6_subnets:
-            ips = generate_ips_from_subnet(subnet, 2)  # 每个IPv6网段生成2个IP
+            ips = generate_ips_from_ipv6_subnet(subnet, 2)  # 每个IPv6网段生成2个IP
             ipv6_from_subnets.extend(ips)
+            print(f"✅ 从IPv6网段 {subnet} 生成 {len(ips)} 个IP")
         all_ips.extend(ipv6_from_subnets)
+        print(f"📊 IPv6网段生成IP: {len(ipv6_from_subnets)} 个")
+    elif CONFIG["ENABLE_IPV6"]:
+        print("ℹ️  未发现IPv6网段")
     
     # 去重
     unique_ips = list(set(all_ips))
@@ -841,8 +882,13 @@ def generate_ips_from_local_pool():
     print(f"   IPv6单IP: {len(ipv6_ips)} 个")
     print(f"   IPv4网段生成: {len(ipv4_from_subnets)} 个")
     if CONFIG["ENABLE_IPV6"]:
-        print(f"   IPv6网段生成: {len(ipv6_from_subnets)} 个")
+        print(f"   IPv6网段生成: {len(ipv6_from_subnets) if 'ipv6_from_subnets' in locals() else 0} 个")
     print(f"   总计唯一IP: {len(unique_ips)} 个")
+    
+    # 统计IPv4/IPv6数量
+    ipv4_count = sum(1 for ip in unique_ips if not is_ipv6_address(ip))
+    ipv6_count = sum(1 for ip in unique_ips if is_ipv6_address(ip))
+    print(f"🔢 最终IP类型: IPv4: {ipv4_count}个, IPv6: {ipv6_count}个")
     
     return unique_ips
 
@@ -877,20 +923,32 @@ def generate_random_ip(subnet):
         network = ipaddress.ip_network(subnet, strict=False)
         if network.version == 6:
             # IPv6生成策略
-            network_addr = int(network.network_address)
-            broadcast_addr = int(network.broadcast_address)
+            network_int = int(network.network_address)
+            broadcast_int = int(network.broadcast_address)
             # 对于IPv6，生成更少的IP
-            random_ip_int = random.randint(network_addr, broadcast_addr)
-            return str(ipaddress.IPv6Address(random_ip_int))
+            random_ip_int = random.randint(network_int, broadcast_int)
+            random_ip = ipaddress.IPv6Address(random_ip_int)
+            
+            # 确保IP在子网内
+            if random_ip in network:
+                return str(random_ip)
+            else:
+                # 如果不在子网内，使用第一个可用地址
+                return str(list(network.hosts())[0]) if network.num_addresses > 1 else str(network.network_address)
         else:
             # IPv4生成策略
             network_addr = int(network.network_address)
             broadcast_addr = int(network.broadcast_address)
             first_ip = network_addr + 1
             last_ip = broadcast_addr - 1
-            random_ip_int = random.randint(first_ip, last_ip)
-            return str(ipaddress.IPv4Address(random_ip_int))
+            if first_ip <= last_ip:
+                random_ip_int = random.randint(first_ip, last_ip)
+                return str(ipaddress.IPv4Address(random_ip_int))
+            else:
+                # 如果子网太小，使用网络地址
+                return str(network.network_address)
     except Exception as e:
+        print(f"⚠️ 生成随机IP时出错 {subnet}: {e}")
         # 备用生成方法
         if ':' in subnet:  # IPv6
             return "2001:db8::1"  # 示例IPv6
@@ -919,6 +977,8 @@ def generate_cloudflare_ip_pool():
     ipv4_subnets = [s for s in subnets if ':' not in s]
     ipv6_subnets = [s for s in subnets if ':' in s]
     
+    print(f"📊 子网统计: IPv4: {len(ipv4_subnets)}个, IPv6: {len(ipv6_subnets)}个")
+    
     with tqdm(total=ip_pool_size, desc="生成Cloudflare IP", unit="IP") as pbar:
         while len(full_ip_pool) < ip_pool_size:
             # 根据配置决定生成IPv4还是IPv6
@@ -933,7 +993,14 @@ def generate_cloudflare_ip_pool():
                 pbar.update(1)
     
     ip_list = list(full_ip_pool)
+    
+    # 统计生成的IP类型
+    ipv4_count = sum(1 for ip in ip_list if not is_ipv6_address(ip))
+    ipv6_count = sum(1 for ip in ip_list if is_ipv6_address(ip))
+    
     print(f"✅ 成功生成 {len(ip_list)} 个Cloudflare随机IP")
+    print(f"📊 生成IP类型: IPv4: {ipv4_count}个, IPv6: {ipv6_count}个")
+    
     return ip_list
 
 def get_test_ip_pool():
