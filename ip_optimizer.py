@@ -30,15 +30,15 @@ CONFIG = {
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~400",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
-    "THREADS": 100,  # 并发线程数 - 减少以避免IPv6连接问题
+    "THREADS": 400,  # 并发线程数 - 减少以避免IPv6连接问题
     "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 200,  # 实际测试IP数量 - 减少IPv6测试数量
-    "TOP_IPS_LIMIT": 50,  # 精选IP数量
+    "TEST_IP_COUNT": 1000,  # 实际测试IP数量 - 减少IPv6测试数量
+    "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CLOUDFLARE_IPS_V6_URL": "https://www.cloudflare.com/ips-v6",  # 新增IPv6 IP段URL
     "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
     "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
-    "ENABLE_IPV6": False,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
+    "ENABLE_IPV6": True,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 8,  # 测速超时时间 - 为IPv6增加时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=5000000",  # 测速URL - 减少数据量
