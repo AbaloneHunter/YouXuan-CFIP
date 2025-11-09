@@ -38,10 +38,8 @@ CONFIG = {
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     
     # 代理检测配置
-    "ENABLE_PROXY_DETECTION": True,  # 启用代理检测国家代码
     "PROXY_DETECTION_TIMEOUT": 5,    # 代理检测超时
     "PROXY_DETECTION_RETRY": 2,      # 代理检测重试次数
-    "BATCH_PROXY_DETECTION": True,   # 启用批量代理检测
     "PROXY_DETECTION_WORKERS": 50,   # 代理检测并发数
     
     # 备用测试URL列表
@@ -64,22 +62,11 @@ CONFIG = {
         'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
         'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
         'UN': '🏴'  # 未知国家
-    },
-    
-    # IP地理位置API配置
-    "IP_GEO_API": {
-        "timeout": 3,
-        "retry": 2,
-        "enable_cache": True
     }
 }
 
-# IP地理位置缓存
-ip_geo_cache = {}
-
 # 自定义IP标记跟踪
 custom_ip_sources = {}  # 记录每个IP的来源：'custom' 或 'cloudflare'
-valid_custom_subnets = set()  # 记录有效的自定义IP段
 invalid_custom_subnets = set()  # 记录无效的自定义IP段
 
 ####################################################
@@ -147,15 +134,12 @@ def get_country_by_proxy_detection(ip, port=443, timeout=None):
         except Exception:
             continue
     
-    return None
+    return 'UN'
 
 def batch_proxy_country_detection(ip_list):
     """
     批量进行代理国家检测
     """
-    if not CONFIG["ENABLE_PROXY_DETECTION"]:
-        return {}
-        
     print("🌍 开始批量代理国家检测...")
     
     results = {}
@@ -172,100 +156,15 @@ def batch_proxy_country_detection(ip_list):
                     country_code = future.result()
                     results[ip] = country_code
                 except Exception:
-                    results[ip] = None
+                    results[ip] = 'UN'
                 finally:
                     pbar.update(1)
     
     # 统计检测结果
-    success_count = sum(1 for country in results.values() if country)
-    print(f"✅ 代理检测成功: {success_count}/{len(ip_list)} 个IP")
+    success_count = sum(1 for country in results.values() if country and country != 'UN')
+    print(f"✅ 代理检测完成: {success_count}/{len(ip_list)} 个IP检测到国家代码")
     
     return results
-
-####################################################
-# IP地理位置查询函数
-####################################################
-
-def get_real_ip_country_code(ip):
-    """
-    使用真实的地理位置API检测IP国家代码
-    """
-    # 检查缓存
-    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
-        return ip_geo_cache[ip]
-    
-    apis = [
-        {
-            'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
-            'field': 'countryCode',
-            'check_field': 'status',
-            'check_value': 'success'
-        },
-        {
-            'url': f'https://ipapi.co/{ip}/json/',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        },
-        {
-            'url': f'https://ip.useragentinfo.com/json?ip={ip}',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        },
-        {
-            'url': f'http://ipinfo.io/{ip}/json',
-            'field': 'country',
-            'check_field': 'country',
-            'check_value': None
-        }
-    ]
-    
-    for api in apis:
-        try:
-            response = requests.get(api['url'], timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
-            if response.status_code == 200:
-                data = response.json()
-                
-                if api['check_value'] is not None:
-                    if data.get(api['check_field']) != api['check_value']:
-                        continue
-                else:
-                    if api['check_field'] not in data:
-                        continue
-                
-                country_code = data.get(api['field'])
-                if country_code:
-                    # 缓存结果
-                    if CONFIG["IP_GEO_API"]["enable_cache"]:
-                        ip_geo_cache[ip] = country_code
-                    
-                    return country_code
-        except Exception:
-            continue
-    
-    # 如果所有API都失败，返回未知
-    return 'UN'
-
-def get_country_code_enhanced(ip):
-    """
-    增强版国家代码检测：优先使用代理检测，失败则回退到API检测
-    """
-    # 检查缓存
-    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
-        return ip_geo_cache[ip]
-    
-    # 如果启用代理检测，优先使用
-    if CONFIG["ENABLE_PROXY_DETECTION"]:
-        proxy_country = get_country_by_proxy_detection(ip, CONFIG["PORT"])
-        if proxy_country:
-            if CONFIG["IP_GEO_API"]["enable_cache"]:
-                ip_geo_cache[ip] = proxy_country
-            return proxy_country
-    
-    # 代理检测失败或未启用，使用传统API
-    api_country = get_real_ip_country_code(ip)
-    return api_country
 
 ####################################################
 # URL测试函数
@@ -676,68 +575,37 @@ def full_test(ip_data):
 
 def enhance_ip_with_country_info(ip_list):
     """
-    为IP列表添加真实的国家代码信息 - 使用增强版检测
+    为IP列表添加真实的国家代码信息 - 只使用代理检测
     """
     enhanced_ips = []
     
-    if CONFIG["ENABLE_PROXY_DETECTION"] and CONFIG["BATCH_PROXY_DETECTION"]:
-        print("🌍 正在使用代理检测IP真实地理位置...")
-        
-        # 先批量进行代理检测
-        ip_addresses = [ip_data[0] for ip_data in ip_list]
-        proxy_countries = batch_proxy_country_detection(ip_addresses)
-        
-        with tqdm(total=len(ip_list), desc="补充IP信息", unit="IP") as pbar:
-            for ip_data in ip_list:
-                ip = ip_data[0]
-                rtt = ip_data[1]
-                loss = ip_data[2]
-                speed = ip_data[3] if len(ip_data) > 3 else 0
-                
-                # 优先使用代理检测结果
-                country_code = proxy_countries.get(ip)
-                detection_method = "proxy" if country_code else "api"
-                
-                # 如果代理检测失败，使用传统API
-                if not country_code:
-                    country_code = get_real_ip_country_code(ip)
-                
-                enhanced_ip = {
-                    'ip': ip,
-                    'rtt': rtt,
-                    'loss': loss,
-                    'speed': speed,
-                    'countryCode': country_code,
-                    'isp': "Cloudflare",
-                    'source': custom_ip_sources.get(ip, 'cloudflare'),
-                    'detection_method': detection_method  # 记录检测方法
-                }
-                enhanced_ips.append(enhanced_ip)
-                pbar.update(1)
-    else:
-        # 使用传统API检测
-        print("🌍 正在检测IP真实地理位置...")
-        with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
-            for ip_data in ip_list:
-                ip = ip_data[0]
-                rtt = ip_data[1]
-                loss = ip_data[2]
-                speed = ip_data[3] if len(ip_data) > 3 else 0
-                
-                country_code = get_country_code_enhanced(ip)
-                
-                enhanced_ip = {
-                    'ip': ip,
-                    'rtt': rtt,
-                    'loss': loss,
-                    'speed': speed,
-                    'countryCode': country_code,
-                    'isp': "Cloudflare",
-                    'source': custom_ip_sources.get(ip, 'cloudflare'),
-                    'detection_method': 'api'  # 传统API检测
-                }
-                enhanced_ips.append(enhanced_ip)
-                pbar.update(1)
+    print("🌍 正在使用代理检测IP真实地理位置...")
+    
+    # 批量进行代理检测
+    ip_addresses = [ip_data[0] for ip_data in ip_list]
+    proxy_countries = batch_proxy_country_detection(ip_addresses)
+    
+    with tqdm(total=len(ip_list), desc="补充IP信息", unit="IP") as pbar:
+        for ip_data in ip_list:
+            ip = ip_data[0]
+            rtt = ip_data[1]
+            loss = ip_data[2]
+            speed = ip_data[3] if len(ip_data) > 3 else 0
+            
+            # 使用代理检测结果
+            country_code = proxy_countries.get(ip, 'UN')
+            
+            enhanced_ip = {
+                'ip': ip,
+                'rtt': rtt,
+                'loss': loss,
+                'speed': speed,
+                'countryCode': country_code,
+                'isp': "Cloudflare",
+                'source': custom_ip_sources.get(ip, 'cloudflare')
+            }
+            enhanced_ips.append(enhanced_ip)
+            pbar.update(1)
     
     return enhanced_ips
 
@@ -795,7 +663,6 @@ def analyze_custom_subnet_performance(enhanced_results):
                 invalid_custom_subnets.add(subnet)
                 print(f"❌ 无效IP段: {subnet} (通过率: {stats['pass_rate']:.1f}%)")
             else:
-                valid_custom_subnets.add(subnet)
                 print(f"✅ 有效IP段: {subnet} (通过率: {stats['pass_rate']:.1f}%, 平均延迟: {stats['avg_rtt']:.1f}ms)")
         else:
             invalid_custom_subnets.add(subnet)
@@ -805,13 +672,13 @@ def analyze_custom_subnet_performance(enhanced_results):
 
 def remove_invalid_custom_subnets():
     """
-    从自定义IP文件中移除无效的IP段
+    从自定义IP文件中直接删除无效的IP段
     """
     custom_file = CONFIG["CUSTOM_IPS_FILE"]
     if not custom_file or not os.path.exists(custom_file) or not invalid_custom_subnets:
         return
     
-    print(f"🗑️ 从自定义IP文件中移除 {len(invalid_custom_subnets)} 个无效IP段...")
+    print(f"🗑️ 从自定义IP文件中删除 {len(invalid_custom_subnets)} 个无效IP段...")
     
     try:
         with open(custom_file, 'r', encoding='utf-8') as f:
@@ -822,28 +689,22 @@ def remove_invalid_custom_subnets():
         
         for line in lines:
             original_line = line.strip()
-            line = original_line
-            
-            # 移除注释
-            if '#' in line:
-                line = line.split('#')[0].strip()
-            
-            if not line:
+            if not original_line:
                 new_lines.append(original_line)
                 continue
             
             # 检查是否是无效的IP段
             is_invalid = False
+            line_content = original_line.split('#')[0].strip() if '#' in original_line else original_line
+            
             for invalid_subnet in invalid_custom_subnets:
-                if line == invalid_subnet or line.startswith(invalid_subnet):
+                if line_content == invalid_subnet:
                     is_invalid = True
                     break
             
             if is_invalid:
-                # 保留但注释掉无效的IP段
-                new_lines.append(f"# {original_line} # 已标记为无效")
                 removed_count += 1
-                print(f"   - 注释无效IP段: {original_line}")
+                print(f"   - 删除无效IP段: {original_line}")
             else:
                 new_lines.append(original_line)
         
@@ -851,13 +712,13 @@ def remove_invalid_custom_subnets():
         with open(custom_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(new_lines) + '\n')
         
-        print(f"✅ 已注释 {removed_count} 个无效IP段")
+        print(f"✅ 已删除 {removed_count} 个无效IP段")
         
     except Exception as e:
         print(f"🚨 更新自定义IP文件失败: {e}")
 
 ####################################################
-# 格式化输出函数 - 添加自定义IP标志'✓'和检测方法指示器
+# 格式化输出函数 - 添加自定义IP标志'✓'
 ####################################################
 
 def format_ip_output(ip_data, port=None):
@@ -873,11 +734,7 @@ def format_ip_output(ip_data, port=None):
     # 添加自定义IP标志
     custom_flag = '✓' if ip_data.get('source') == 'custom' else ''
     
-    # 添加检测方法指示器
-    detection_method = ip_data.get('detection_method', 'api')
-    detection_indicator = '🔍' if detection_method == 'proxy' else '📡'
-    
-    return f"{ip_data['ip']}:{port}#{flag} {country_code}{custom_flag} {detection_indicator}"
+    return f"{ip_data['ip']}:{port}#{flag} {country_code}{custom_flag}"
 
 def format_ip_list_for_display(ip_list, port=None):
     """
@@ -950,7 +807,7 @@ if __name__ == "__main__":
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称✓ (✓表示自定义IP)")
-    print(f"地理位置检测: {'代理检测🔍' if CONFIG['ENABLE_PROXY_DETECTION'] else 'API检测📡'}")
+    print(f"地理位置检测: 代理检测🔍")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -1034,10 +891,10 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 6. 为IP添加真实国家代码信息和来源标记（使用增强版检测）
+    # 6. 为IP添加真实国家代码信息和来源标记（只使用代理检测）
     enhanced_results = enhance_ip_with_country_info(full_results)
     
-    # 7. 分析自定义IP段性能并移除无效IP段
+    # 7. 分析自定义IP段性能并删除无效IP段
     subnet_performance = analyze_custom_subnet_performance(enhanced_results)
     remove_invalid_custom_subnets()
 
@@ -1057,29 +914,25 @@ if __name__ == "__main__":
         f.write("\n".join([ip[0] for ip in passed_ips]))
     
     with open('results/full_results.csv', 'w') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源,检测方法\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
         for ip_data in enhanced_results:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')},{ip_data.get('detection_method', 'api')}\n")
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')}\n")
     
-    # 所有输出文件都使用统一格式（包含✓标志和检测方法）
+    # 所有输出文件都使用统一格式（包含✓标志）
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
         formatted_lines = format_ip_list_for_file(sorted_ips)
         f.write("\n".join(formatted_lines))
     
     with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源,检测方法\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
         for ip_data in sorted_ips:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')},{ip_data.get('detection_method', 'api')}\n")
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')}\n")
 
     # 10. 按国家分组统计
     country_stats = {}
-    detection_stats = {'proxy': 0, 'api': 0}
     
     for ip_data in enhanced_results:
         country = ip_data['countryCode']
-        detection_method = ip_data.get('detection_method', 'api')
-        detection_stats[detection_method] = detection_stats.get(detection_method, 0) + 1
-        
         if country not in country_stats:
             country_stats[country] = {
                 'count': 0,
@@ -1112,10 +965,7 @@ if __name__ == "__main__":
     print(f"通过延迟测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
-    
-    # 检测方法统计
-    if CONFIG["ENABLE_PROXY_DETECTION"]:
-        print(f"国家检测方法: 代理检测🔍 {detection_stats.get('proxy', 0)}个, API检测📡 {detection_stats.get('api', 0)}个")
+    print(f"国家检测方法: 代理检测🔍")
     
     # 统计自定义IP表现
     custom_passed = sum(1 for ip in enhanced_results if ip.get('source') == 'custom')
@@ -1131,14 +981,14 @@ if __name__ == "__main__":
         print(f"  {flag} {country}: {stats['count']}个IP{custom_info}, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
     
     if sorted_ips:
-        print(f"\n🏆【最佳IP TOP10】(✓表示自定义IP, 🔍=代理检测, 📡=API检测)")
+        print(f"\n🏆【最佳IP TOP10】(✓表示自定义IP)")
         formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
         for i, formatted_ip in enumerate(formatted_top_ips, 1):
             ip_data = sorted_ips[i-1]
             source_info = " [自定义]" if ip_data.get('source') == 'custom' else ""
             print(f"{i:2d}. {formatted_ip} (延迟:{ip_data['rtt']:.1f}ms, 速度:{ip_data['speed']:.1f}Mbps{source_info})")
         
-        print(f"\n📋【全部精选IP】(✓表示自定义IP, 🔍=代理检测, 📡=API检测)")
+        print(f"\n📋【全部精选IP】(✓表示自定义IP)")
         formatted_all_ips = format_ip_list_for_display(sorted_ips)
         for i in range(0, len(formatted_all_ips), 2):
             line_ips = formatted_all_ips[i:i+2]
@@ -1147,8 +997,8 @@ if __name__ == "__main__":
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
     print("📊 文件说明:")
-    print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 国家简称✓ 🔍/📡)")
+    print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 国家简称✓)")
     print("   - top_ips_details.csv: 详细性能数据")
     print("   - country_stats.csv: 国家统计信息")
-    print("🗑️  无效的自定义IP段已自动注释")
+    print("🗑️  无效的自定义IP段已直接从文件中删除")
     print("="*60)
