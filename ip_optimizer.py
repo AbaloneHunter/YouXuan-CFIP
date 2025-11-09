@@ -37,7 +37,7 @@ CONFIG = {
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
     "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
-    "ENABLE_IPV6": True,  # 是否启用IPv6测试
+    "ENABLE_IPV6": False,  # 是否启用IPv6测试
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
@@ -523,6 +523,109 @@ def speed_test(ip):
         return 0.0
 
 ####################################################
+# 清理本地IP池功能
+####################################################
+
+def clean_local_ip_pool():
+    """
+    清除本地IP池中的重复IP和延迟测试未通过的IP
+    不生成任何备份和报告文件
+    """
+    local_file = CONFIG["LOCAL_IP_POOL_FILE"]
+    
+    if not os.path.exists(local_file):
+        print(f"❌ 未找到本地IP池文件: {local_file}")
+        return
+    
+    print(f"🔍 开始清理本地IP池文件: {local_file}")
+    
+    # 读取原始文件内容
+    with open(local_file, 'r', encoding='utf-8') as f:
+        original_lines = f.readlines()
+    
+    # 提取所有IP（保留原始行结构用于注释）
+    ip_to_line = {}
+    unique_ips = set()
+    duplicate_count = 0
+    
+    for line in original_lines:
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+            
+        ip = extract_ip_from_line(line)
+        if ip:
+            if ip in unique_ips:
+                duplicate_count += 1
+                continue
+            unique_ips.add(ip)
+            ip_to_line[ip] = line
+    
+    print(f"📊 分析完成: 总IP数 {len(unique_ips)}, 重复IP {duplicate_count}个")
+    
+    if not unique_ips:
+        print("❌ 未找到有效IP，清理终止")
+        return
+    
+    # 测试IP的延迟
+    print("🚀 开始延迟测试筛选IP...")
+    test_results = []
+    
+    with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
+        future_to_ip = {executor.submit(ping_test, ip): ip for ip in unique_ips}
+        with tqdm(total=len(unique_ips), desc="延迟测试", unit="IP") as pbar:
+            for future in as_completed(future_to_ip):
+                try:
+                    test_results.append(future.result())
+                except Exception:
+                    pass
+                finally:
+                    pbar.update(1)
+    
+    # 筛选符合延迟要求的IP
+    rtt_min, rtt_max = map(int, CONFIG["RTT_RANGE"].split('~'))
+    loss_max = CONFIG["LOSS_MAX"]
+    
+    passed_ips = [
+        ip_data for ip_data in test_results
+        if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
+    ]
+    
+    print(f"✅ 延迟测试完成: 总数 {len(test_results)}, 通过 {len(passed_ips)}")
+    
+    if not passed_ips:
+        print("❌ 没有IP通过延迟测试，清理终止")
+        return
+    
+    # 构建新的IP列表（保留原始格式）
+    cleaned_ips = []
+    passed_ip_set = {ip_data[0] for ip_data in passed_ips}
+    
+    for ip, original_line in ip_to_line.items():
+        if ip in passed_ip_set:
+            cleaned_ips.append(original_line)
+    
+    # 直接覆盖原文件
+    with open(local_file, 'w', encoding='utf-8') as f:
+        # 写入文件头注释
+        f.write(f"# 清理时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"# 原始IP数: {len(unique_ips)}, 清理后: {len(cleaned_ips)}\n")
+        f.write(f"# 延迟范围: {CONFIG['RTT_RANGE']}ms, 最大丢包: {CONFIG['LOSS_MAX']}%\n")
+        f.write(f"# 重复IP已移除: {duplicate_count}个\n")
+        f.write(f"# 未通过延迟测试: {len(unique_ips) - len(cleaned_ips)}个\n\n")
+        
+        # 写入清理后的IP
+        for line in cleaned_ips:
+            f.write(line + '\n')
+    
+    print(f"🎉 清理完成!")
+    print(f"✅ 原始IP数: {len(unique_ips)}")
+    print(f"✅ 清理后IP数: {len(cleaned_ips)}")
+    print(f"✅ 移除重复IP: {duplicate_count}个")
+    print(f"✅ 移除无效IP: {len(unique_ips) - len(cleaned_ips)}个")
+    print(f"💾 结果已保存到: {local_file}")
+
+####################################################
 # 核心功能函数
 ####################################################
 
@@ -858,6 +961,13 @@ def validate_test_urls():
 # 主逻辑
 ####################################################
 if __name__ == "__main__":
+    import sys
+    
+    # 检查是否要执行清理功能
+    if len(sys.argv) > 1 and sys.argv[1] == "clean":
+        clean_local_ip_pool()
+        sys.exit(0)
+    
     # 0. 初始化环境
     init_env()
     
@@ -901,6 +1011,8 @@ if __name__ == "__main__":
         print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
     
     print(f"测速URL: {CONFIG['SPEED_URL']}")
+    print("="*60)
+    print("💡 提示: 使用 'python cf_ip_tester.py clean' 清理本地IP池")
     print("="*60 + "\n")
 
     # 3. 获取测试IP池
