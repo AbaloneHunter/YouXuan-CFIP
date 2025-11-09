@@ -37,7 +37,7 @@ CONFIG = {
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
     "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
-    "ENABLE_IPV6": False,  # 是否启用IPv6测试
+    "ENABLE_IPV6": True,  # 是否启用IPv6测试
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
