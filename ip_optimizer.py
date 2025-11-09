@@ -34,7 +34,7 @@ CONFIG = {
     "IP_POOL_SIZE": 50000,  # IP池总大小
     "TEST_IP_COUNT": 800,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 50,  # 精选IP数量
-    "CLOUDFLARE_IPS_URL": "https://raw.githubusercontent.com/cmliu/ACL4SSR/main/baipiao.txt",
+    "CLOUDFLARE_IPS_URL": "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/13335/ipv4-aggregated.txt",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
