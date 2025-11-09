@@ -1,7 +1,5 @@
 国家代码,IP数量,IPv4数量,IPv6数量,平均延迟(ms),平均速度(Mbps),来源
-US,90,90,0,14.10,0.00,Cloudflare
-CA,62,62,0,17.53,0.00,Cloudflare
-FR,2,2,0,99.15,0.00,Cloudflare
-CR,8,8,0,12.52,0.00,Cloudflare
-GB,1,1,0,8.54,0.00,Cloudflare
-UA,2,2,0,18.71,0.00,Cloudflare
+US,132,132,0,15.26,0.00,Cloudflare
+CA,13,13,0,13.10,0.00,Cloudflare
+CR,9,9,0,15.85,0.00,Cloudflare
+GB,1,1,0,17.95,0.00,Cloudflare
