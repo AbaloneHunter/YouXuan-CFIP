@@ -21,26 +21,26 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ####################################################
 CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：PING/TCP/URL_TEST
-    "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
-    "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
-    "URL_TEST_TIMEOUT": 5,  # URL测试超时(秒) - 为IPv6增加时间
+    "PING_TARGET": "https://www.gstatic.com/generate_204",  # Ping测试目标
+    "URL_TEST_TARGET": "https://www.gstatic.com/generate_204",  # URL测试目标
+    "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒) - 为IPv6增加时间
     "URL_TEST_RETRY": 2,  # URL测试重试次数
     "PING_COUNT": 3,  # Ping次数 - 减少以加快测试
-    "PING_TIMEOUT": 5,  # Ping超时(秒) - 为IPv6增加时间
+    "PING_TIMEOUT": 3,  # Ping超时(秒) - 为IPv6增加时间
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~400",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
-    "THREADS": 400,  # 并发线程数 - 减少以避免IPv6连接问题
+    "THREADS": 100,  # 并发线程数 - 减少以避免IPv6连接问题
     "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 1000,  # 实际测试IP数量 - 减少IPv6测试数量
-    "TOP_IPS_LIMIT": 100,  # 精选IP数量
+    "TEST_IP_COUNT": 2000,  # 实际测试IP数量 - 减少IPv6测试数量
+    "TOP_IPS_LIMIT": 88,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CLOUDFLARE_IPS_V6_URL": "https://www.cloudflare.com/ips-v6",  # 新增IPv6 IP段URL
-    "LOCAL_IP_POOL": False,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
+    "LOCAL_IP_POOL": True,  # 是否只使用本地IP池（True:只使用本地, False:使用URL）
     "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 本地IP池文件路径
-    "ENABLE_IPV6": True,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
+    "ENABLE_IPV6": False,  # 是否启用IPv6测试 - 默认关闭，需要时手动开启
     "TCP_RETRY": 2,  # TCP重试次数
-    "SPEED_TIMEOUT": 8,  # 测速超时时间 - 为IPv6增加时间
+    "SPEED_TIMEOUT": 5,  # 测速超时时间 - 为IPv6增加时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=5000000",  # 测速URL - 减少数据量
     
     # IPv6专用测试URL（支持IPv6访问）
@@ -52,9 +52,9 @@ CONFIG = {
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
-        "http://www.gstatic.com/generate_204",
-        "http://cp.cloudflare.com/",
-        "http://www.cloudflare.com/favicon.ico"
+        "https://www.gstatic.com/generate_204",
+        "https://cp.cloudflare.com/",
+        "https://www.cloudflare.com/favicon.ico"
     ],
     
     # 国家代码到国旗的映射
@@ -200,7 +200,6 @@ def generate_ips_from_ipv6_subnet(subnet, count=5):
     """专门为IPv6网段生成IP（修复版本）"""
     try:
         network = ipaddress.ip_network(subnet, strict=False)
-        print(f"🔧 处理IPv6网段: {subnet}, 总地址数: {network.num_addresses}")
         
         ips = []
         
@@ -220,12 +219,197 @@ def generate_ips_from_ipv6_subnet(subnet, count=5):
                 if random_ip in network:
                     ips.append(str(random_ip))
         
-        print(f"✅ 从 {subnet} 生成 {len(ips)} 个IPv6地址")
         return ips
         
     except Exception as e:
         print(f"❌ 生成IPv6 IP时出错 {subnet}: {e}")
         return []
+
+####################################################
+# 清理本地IP池功能
+####################################################
+
+def clean_local_ip_pool_comprehensive():
+    """
+    全面清理本地IP池：移除重复IP、无效IP段、延迟测试未通过的IP和IP段
+    不生成任何备份和报告文件
+    """
+    local_file = CONFIG["LOCAL_IP_POOL_FILE"]
+    
+    if not os.path.exists(local_file):
+        print(f"❌ 未找到本地IP池文件: {local_file}")
+        return
+    
+    print(f"🔍 开始全面清理本地IP池文件: {local_file}")
+    print("📝 清理内容: 重复IP、无效IP段、延迟测试未通过的IP和IP段")
+    
+    # 读取原始文件内容
+    with open(local_file, 'r', encoding='utf-8') as f:
+        original_lines = f.readlines()
+    
+    # 分析文件内容
+    valid_ips = set()
+    valid_subnets = set()
+    ip_to_line = {}
+    subnet_to_line = {}
+    duplicate_count = 0
+    invalid_subnet_count = 0
+    comment_lines = []
+    
+    for line_num, line in enumerate(original_lines):
+        line = line.strip()
+        if not line:
+            continue
+            
+        if line.startswith('#'):
+            # 保留注释行
+            comment_lines.append(line)
+            continue
+        
+        # 尝试提取IP
+        ip = extract_ip_from_line(line)
+        if ip:
+            if ip in valid_ips:
+                duplicate_count += 1
+                print(f"⚠️  发现重复IP: {ip} (第{line_num+1}行)")
+                continue
+            valid_ips.add(ip)
+            ip_to_line[ip] = line
+            continue
+        
+        # 尝试识别IP段
+        if '/' in line:
+            subnet_part = line.split('#')[0].strip() if '#' in line else line
+            try:
+                network = ipaddress.ip_network(subnet_part, strict=False)
+                subnet_str = str(network)
+                if subnet_str in valid_subnets:
+                    duplicate_count += 1
+                    print(f"⚠️  发现重复网段: {subnet_str} (第{line_num+1}行)")
+                    continue
+                valid_subnets.add(subnet_str)
+                subnet_to_line[subnet_str] = line
+            except Exception as e:
+                invalid_subnet_count += 1
+                print(f"❌ 无效网段: {subnet_part} (第{line_num+1}行) - {e}")
+                continue
+        else:
+            # 无法识别的行，保留原样
+            comment_lines.append(line)
+    
+    print(f"📊 分析完成:")
+    print(f"  有效IP: {len(valid_ips)} 个")
+    print(f"  有效网段: {len(valid_subnets)} 个")
+    print(f"  重复项: {duplicate_count} 个")
+    print(f"  无效网段: {invalid_subnet_count} 个")
+    
+    # 合并所有要测试的IP（单个IP + 从网段生成的IP）
+    all_test_ips = set()
+    
+    # 添加单个IP
+    all_test_ips.update(valid_ips)
+    
+    # 从网段生成测试IP
+    subnet_generated_ips = {}
+    for subnet in valid_subnets:
+        if ':' in subnet and CONFIG["ENABLE_IPV6"]:
+            generated_ips = generate_ips_from_ipv6_subnet(subnet, 3)  # 每个IPv6网段测试3个IP
+        else:
+            generated_ips = generate_ips_from_subnet(subnet, 5)  # 每个IPv4网段测试5个IP
+        
+        subnet_generated_ips[subnet] = generated_ips
+        all_test_ips.update(generated_ips)
+        print(f"🔧 从网段 {subnet} 生成 {len(generated_ips)} 个测试IP")
+    
+    print(f"🚀 开始延迟测试 {len(all_test_ips)} 个IP...")
+    
+    # 测试所有IP的延迟
+    test_results = []
+    threads = min(CONFIG["THREADS"], 50)  # 减少线程数避免卡住
+    
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        future_to_ip = {executor.submit(ping_test, ip): ip for ip in all_test_ips}
+        with tqdm(total=len(all_test_ips), desc="延迟测试", unit="IP") as pbar:
+            for future in as_completed(future_to_ip):
+                try:
+                    result = future.result()
+                    test_results.append(result)
+                except Exception as e:
+                    print(f"\n⚠️  IP测试异常: {e}")
+                finally:
+                    pbar.update(1)
+    
+    # 筛选符合延迟要求的IP
+    rtt_min, rtt_max = map(int, CONFIG["RTT_RANGE"].split('~'))
+    loss_max = CONFIG["LOSS_MAX"]
+    
+    passed_ips = [
+        ip_data for ip_data in test_results
+        if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
+    ]
+    
+    passed_ip_set = {ip_data[0] for ip_data in passed_ips}
+    
+    print(f"✅ 延迟测试完成: 总数 {len(test_results)}, 通过 {len(passed_ips)}")
+    
+    # 分析网段通过率
+    passed_subnets = set()
+    for subnet, generated_ips in subnet_generated_ips.items():
+        passed_count = sum(1 for ip in generated_ips if ip in passed_ip_set)
+        total_count = len(generated_ips)
+        pass_rate = (passed_count / total_count) * 100 if total_count > 0 else 0
+        
+        print(f"📊 网段 {subnet}: {passed_count}/{total_count} 通过 ({pass_rate:.1f}%)")
+        
+        # 如果通过率超过50%，保留该网段
+        if pass_rate >= 50:
+            passed_subnets.add(subnet)
+        else:
+            print(f"🗑️  移除低质量网段: {subnet} (通过率: {pass_rate:.1f}%)")
+    
+    # 构建清理后的内容
+    cleaned_lines = []
+    
+    # 添加注释头
+    cleaned_lines.append(f"# 全面清理时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    cleaned_lines.append(f"# 清理前: {len(valid_ips)}个IP + {len(valid_subnets)}个网段")
+    cleaned_lines.append(f"# 清理后: {len(passed_ip_set)}个IP + {len(passed_subnets)}个网段")
+    cleaned_lines.append(f"# 移除: {duplicate_count}个重复 + {invalid_subnet_count}个无效网段")
+    cleaned_lines.append(f"# 延迟要求: {CONFIG['RTT_RANGE']}ms, 丢包率: {CONFIG['LOSS_MAX']}%")
+    cleaned_lines.append("")
+    
+    # 添加保留的注释行
+    for comment in comment_lines:
+        cleaned_lines.append(comment)
+    
+    if comment_lines:  # 如果有注释行，添加空行分隔
+        cleaned_lines.append("")
+    
+    # 添加通过的IP段
+    if passed_subnets:
+        cleaned_lines.append("# 通过的IP段:")
+        for subnet in sorted(passed_subnets):
+            cleaned_lines.append(subnet_to_line[subnet])
+        cleaned_lines.append("")
+    
+    # 添加通过的单个IP
+    if passed_ip_set:
+        cleaned_lines.append("# 通过的单个IP:")
+        for ip in sorted(passed_ip_set):
+            if ip in ip_to_line:
+                cleaned_lines.append(ip_to_line[ip])
+    
+    # 直接覆盖原文件
+    with open(local_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(cleaned_lines))
+    
+    print(f"\n🎉 全面清理完成!")
+    print(f"✅ 原始: {len(valid_ips)}个IP + {len(valid_subnets)}个网段")
+    print(f"✅ 清理后: {len(passed_ip_set)}个IP + {len(passed_subnets)}个网段")
+    print(f"✅ 移除重复: {duplicate_count}个")
+    print(f"✅ 移除无效网段: {invalid_subnet_count}个")
+    print(f"✅ 移除低质量IP和网段: {len(valid_ips) - len(passed_ip_set)}个IP + {len(valid_subnets) - len(passed_subnets)}个网段")
+    print(f"💾 结果已保存到: {local_file}")
 
 ####################################################
 # IP地理位置查询函数
@@ -664,112 +848,6 @@ def speed_test(ip):
         return 0.0
 
 ####################################################
-# 清理本地IP池功能
-####################################################
-
-def clean_local_ip_pool():
-    """
-    清除本地IP池中的重复IP和延迟测试未通过的IP
-    不生成任何备份和报告文件
-    """
-    local_file = CONFIG["LOCAL_IP_POOL_FILE"]
-    
-    if not os.path.exists(local_file):
-        print(f"❌ 未找到本地IP池文件: {local_file}")
-        return
-    
-    print(f"🔍 开始清理本地IP池文件: {local_file}")
-    
-    # 读取原始文件内容
-    with open(local_file, 'r', encoding='utf-8') as f:
-        original_lines = f.readlines()
-    
-    # 提取所有IP（保留原始行结构用于注释）
-    ip_to_line = {}
-    unique_ips = set()
-    duplicate_count = 0
-    
-    for line in original_lines:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-            
-        ip = extract_ip_from_line(line)
-        if ip:
-            if ip in unique_ips:
-                duplicate_count += 1
-                continue
-            unique_ips.add(ip)
-            ip_to_line[ip] = line
-    
-    print(f"📊 分析完成: 总IP数 {len(unique_ips)}, 重复IP {duplicate_count}个")
-    
-    if not unique_ips:
-        print("❌ 未找到有效IP，清理终止")
-        return
-    
-    # 测试IP的延迟
-    print("🚀 开始延迟测试筛选IP...")
-    test_results = []
-    
-    # 减少线程数以避免IPv6连接问题
-    threads = min(CONFIG["THREADS"], 50)
-    
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        future_to_ip = {executor.submit(ping_test, ip): ip for ip in unique_ips}
-        with tqdm(total=len(unique_ips), desc="延迟测试", unit="IP") as pbar:
-            for future in as_completed(future_to_ip):
-                try:
-                    test_results.append(future.result())
-                except Exception:
-                    pass
-                finally:
-                    pbar.update(1)
-    
-    # 筛选符合延迟要求的IP
-    rtt_min, rtt_max = map(int, CONFIG["RTT_RANGE"].split('~'))
-    loss_max = CONFIG["LOSS_MAX"]
-    
-    passed_ips = [
-        ip_data for ip_data in test_results
-        if rtt_min <= ip_data[1] <= rtt_max and ip_data[2] <= loss_max
-    ]
-    
-    print(f"✅ 延迟测试完成: 总数 {len(test_results)}, 通过 {len(passed_ips)}")
-    
-    if not passed_ips:
-        print("❌ 没有IP通过延迟测试，清理终止")
-        return
-    
-    # 构建新的IP列表（保留原始格式）
-    cleaned_ips = []
-    passed_ip_set = {ip_data[0] for ip_data in passed_ips}
-    
-    for ip, original_line in ip_to_line.items():
-        if ip in passed_ip_set:
-            cleaned_ips.append(original_line)
-    
-    # 直接覆盖原文件
-    with open(local_file, 'w', encoding='utf-8') as f:
-        # 写入文件头注释
-        f.write(f"# 清理时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"# 原始IP数: {len(unique_ips)}, 清理后: {len(cleaned_ips)}n")
-        f.write(f"# 延迟范围: {CONFIG['RTT_RANGE']}ms, 最大丢包: {CONFIG['LOSS_MAX']}%\n")
-        f.write(f"# 重复IP已移除: {duplicate_count}个\n")
-        f.write(f"# 未通过延迟测试: {len(unique_ips) - len(cleaned_ips)}个\n\n")
-        
-        # 写入清理后的IP
-        for line in cleaned_ips:
-            f.write(line + '\n')
-    
-    print(f"🎉 清理完成!")
-    print(f"✅ 原始IP数: {len(unique_ips)}")
-    print(f"✅ 清理后IP数: {len(cleaned_ips)}")
-    print(f"✅ 移除重复IP: {duplicate_count}个")
-    print(f"✅ 移除无效IP: {len(unique_ips) - len(cleaned_ips)}个")
-    print(f"💾 结果已保存到: {local_file}")
-
-####################################################
 # 核心功能函数
 ####################################################
 
@@ -821,10 +899,8 @@ def analyze_local_ip_pool():
                         ipv4_subnets.append(str(network))
                     else:
                         ipv6_subnets.append(str(network))
-                        print(f"✅ 发现IPv6网段: {subnet_part}")
-                except Exception as e:
+                except:
                     # 不是有效的IP段
-                    print(f"⚠️ 无效的IP段: {subnet_part} - {e}")
                     pass
         
         print(f"✅ 分析完成:")
@@ -851,14 +927,12 @@ def generate_ips_from_local_pool():
     all_ips.extend(ipv4_ips)
     if CONFIG["ENABLE_IPV6"]:
         all_ips.extend(ipv6_ips)
-        print(f"✅ 添加 {len(ipv6_ips)} 个IPv6单IP")
     
     # 从IPv4网段生成IP
     ipv4_from_subnets = []
     for subnet in ipv4_subnets:
         ips = generate_ips_from_subnet(subnet, 3)  # 每个网段生成3个IP
         ipv4_from_subnets.extend(ips)
-        print(f"✅ 从IPv4网段 {subnet} 生成 {len(ips)} 个IP")
     
     all_ips.extend(ipv4_from_subnets)
     
@@ -868,11 +942,7 @@ def generate_ips_from_local_pool():
         for subnet in ipv6_subnets:
             ips = generate_ips_from_ipv6_subnet(subnet, 2)  # 每个IPv6网段生成2个IP
             ipv6_from_subnets.extend(ips)
-            print(f"✅ 从IPv6网段 {subnet} 生成 {len(ips)} 个IP")
         all_ips.extend(ipv6_from_subnets)
-        print(f"📊 IPv6网段生成IP: {len(ipv6_from_subnets)} 个")
-    elif CONFIG["ENABLE_IPV6"]:
-        print("ℹ️  未发现IPv6网段")
     
     # 去重
     unique_ips = list(set(all_ips))
@@ -884,11 +954,6 @@ def generate_ips_from_local_pool():
     if CONFIG["ENABLE_IPV6"]:
         print(f"   IPv6网段生成: {len(ipv6_from_subnets) if 'ipv6_from_subnets' in locals() else 0} 个")
     print(f"   总计唯一IP: {len(unique_ips)} 个")
-    
-    # 统计IPv4/IPv6数量
-    ipv4_count = sum(1 for ip in unique_ips if not is_ipv6_address(ip))
-    ipv6_count = sum(1 for ip in unique_ips if is_ipv6_address(ip))
-    print(f"🔢 最终IP类型: IPv4: {ipv4_count}个, IPv6: {ipv6_count}个")
     
     return unique_ips
 
@@ -1202,7 +1267,7 @@ if __name__ == "__main__":
     
     # 检查是否要执行清理功能
     if len(sys.argv) > 1 and sys.argv[1] == "clean":
-        clean_local_ip_pool()
+        clean_local_ip_pool_comprehensive()
         sys.exit(0)
     
     # 0. 初始化环境
