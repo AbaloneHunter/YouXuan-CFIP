@@ -1,0 +1,6 @@
+国家代码,来源,IP数量,平均延迟(ms),平均速度(Mbps)
+US,cloudflare,151,24.69,20.73
+CA,cloudflare,15,14.73,17.98
+CR,cloudflare,14,14.33,19.71
+US,backup,1,70.52,18.30
+DE,backup,1,180.10,15.46
