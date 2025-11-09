@@ -35,7 +35,8 @@ CONFIG = {
     "TEST_IP_COUNT": 1000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
-    "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
+    "LOCAL_IP_POOL": True,  # 新增：是否只使用本地IP池（True:只使用本地, False:使用URL）
+    "LOCAL_IP_POOL_FILE": "Local-IPpool.txt",  # 新增：本地IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
@@ -415,22 +416,65 @@ def init_env():
     for key, value in CONFIG.items():
         os.environ[key] = str(value)
 
-def fetch_ip_ranges():
-    """获取IP段"""
-    custom_file = CONFIG["CUSTOM_IPS_FILE"]
-    if custom_file and os.path.exists(custom_file):
-        print(f"🔧 使用自定义IP池文件: {custom_file}")
+def fetch_local_ip_pool():
+    """
+    从本地IP池文件获取IP列表
+    """
+    local_file = CONFIG["LOCAL_IP_POOL_FILE"]
+    if os.path.exists(local_file):
+        print(f"🔧 使用本地IP池文件: {local_file}")
         try:
-            with open(custom_file, 'r') as f:
-                return [line.strip() for line in f.readlines() if line.strip()]
+            with open(local_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            ip_list = []
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    # 支持各种IP格式
+                    if ':' in line:
+                        # 包含端口的格式 ip:port
+                        ip = line.split(':')[0]
+                    elif '#' in line:
+                        # 包含注释的格式 ip#comment
+                        ip = line.split('#')[0]
+                    else:
+                        # 纯IP格式
+                        ip = line
+                    
+                    # 验证IP格式
+                    try:
+                        ipaddress.IPv4Address(ip)
+                        ip_list.append(ip)
+                    except:
+                        continue
+            
+            print(f"✅ 从本地IP池读取到 {len(ip_list)} 个IP")
+            return ip_list
         except Exception as e:
-            print(f"🚨 读取自定义IP池失败: {e}")
+            print(f"🚨 读取本地IP池失败: {e}")
+    
+    print(f"❌ 未找到本地IP池文件: {local_file}")
+    return []
+
+def fetch_cloudflare_ip_ranges():
+    """
+    从Cloudflare URL获取IP段
+    """
     url = CONFIG["CLOUDFLARE_IPS_URL"]
     try:
+        print(f"🌐 从Cloudflare获取IP段: {url}")
         res = requests.get(url, timeout=10, verify=False)
-        return res.text.splitlines()
+        if res.status_code == 200:
+            subnets = res.text.splitlines()
+            subnets = [subnet.strip() for subnet in subnets if subnet.strip()]
+            print(f"✅ 从Cloudflare获取到 {len(subnets)} 个IP段")
+            return subnets
+        else:
+            print(f"❌ Cloudflare返回状态码: {res.status_code}")
     except Exception as e:
         print(f"🚨 获取Cloudflare IP段失败: {e}")
+    
     return []
 
 def generate_random_ip(subnet):
@@ -450,6 +494,64 @@ def generate_random_ip(subnet):
             parts.append(str(random.randint(0, 255)))
         parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
         return ".".join(parts)
+
+def generate_cloudflare_ip_pool():
+    """
+    生成Cloudflare IP池
+    """
+    subnets = fetch_cloudflare_ip_ranges()
+    if not subnets:
+        return []
+    
+    ip_pool_size = CONFIG["IP_POOL_SIZE"]
+    full_ip_pool = set()
+    
+    print(f"🔧 正在生成 {ip_pool_size} 个Cloudflare随机IP...")
+    with tqdm(total=ip_pool_size, desc="生成Cloudflare IP", unit="IP") as pbar:
+        while len(full_ip_pool) < ip_pool_size:
+            subnet = random.choice(subnets)
+            ip = generate_random_ip(subnet)
+            if ip not in full_ip_pool:
+                full_ip_pool.add(ip)
+                pbar.update(1)
+    
+    ip_list = list(full_ip_pool)
+    print(f"✅ 成功生成 {len(ip_list)} 个Cloudflare随机IP")
+    return ip_list
+
+def get_test_ip_pool():
+    """
+    根据配置获取测试IP池
+    """
+    if CONFIG["LOCAL_IP_POOL"]:
+        # 使用本地IP池
+        ip_list = fetch_local_ip_pool()
+        if not ip_list:
+            print("❌ 无法获取本地IP池，程序终止")
+            exit(1)
+        
+        # 如果本地IP数量超过测试数量，随机选择
+        test_ip_count = min(CONFIG["TEST_IP_COUNT"], len(ip_list))
+        if len(ip_list) > test_ip_count:
+            test_ips = random.sample(ip_list, test_ip_count)
+            print(f"🔧 从本地IP池随机选择 {test_ip_count} 个IP进行测试")
+        else:
+            test_ips = ip_list
+            print(f"🔧 使用全部 {len(ip_list)} 个本地IP进行测试")
+        
+        return test_ips
+    else:
+        # 使用Cloudflare IP池
+        ip_list = generate_cloudflare_ip_pool()
+        if not ip_list:
+            print("❌ 无法生成Cloudflare IP池，程序终止")
+            exit(1)
+        
+        test_ip_count = min(CONFIG["TEST_IP_COUNT"], len(ip_list))
+        test_ips = random.sample(ip_list, test_ip_count)
+        print(f"🔧 从Cloudflare IP池选择 {test_ip_count} 个IP进行测试")
+        
+        return test_ips
 
 def ping_test(ip):
     """延迟测试入口 - 支持三种模式"""
@@ -590,6 +692,7 @@ if __name__ == "__main__":
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称")
     print(f"地理位置API: 启用")
+    print(f"本地IP池: {'开启' if CONFIG['LOCAL_IP_POOL'] else '关闭'}")
     
     mode = CONFIG["MODE"]
     if mode == "PING":
@@ -607,46 +710,20 @@ if __name__ == "__main__":
     print(f"延迟范围: {CONFIG['RTT_RANGE']}ms")
     print(f"最大丢包: {CONFIG['LOSS_MAX']}%")
     print(f"并发线程: {CONFIG['THREADS']}")
-    print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
     print(f"测试IP数: {CONFIG['TEST_IP_COUNT']}")
-    custom_file = CONFIG["CUSTOM_IPS_FILE"]
-    if custom_file:
-        print(f"自定义IP池: {custom_file}")
+    
+    if CONFIG["LOCAL_IP_POOL"]:
+        print(f"IP源: 本地IP池 ({CONFIG['LOCAL_IP_POOL_FILE']})")
     else:
-        print(f"Cloudflare IP源: {CONFIG['CLOUDFLARE_IPS_URL']}")
+        print(f"IP源: Cloudflare URL ({CONFIG['CLOUDFLARE_IPS_URL']})")
+        print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
+    
     print(f"测速URL: {CONFIG['SPEED_URL']}")
     print("="*60 + "\n")
 
-    # 3. 获取IP段并生成随机IP池
-    subnets = fetch_ip_ranges()
-    if not subnets:
-        print("❌ 无法获取IP段，程序终止")
-        exit(1)
-    
-    source_type = "自定义" if custom_file and os.path.exists(custom_file) else "Cloudflare"
-    print(f"✅ 获取到 {len(subnets)} 个{source_type} IP段")
-    
-    ip_pool_size = CONFIG["IP_POOL_SIZE"]
-    test_ip_count = CONFIG["TEST_IP_COUNT"]
-    full_ip_pool = set()
-    
-    print(f"🔧 正在生成 {ip_pool_size} 个随机IP的大池...")
-    with tqdm(total=ip_pool_size, desc="生成IP大池", unit="IP") as pbar:
-        while len(full_ip_pool) < ip_pool_size:
-            subnet = random.choice(subnets)
-            ip = generate_random_ip(subnet)
-            if ip not in full_ip_pool:
-                full_ip_pool.add(ip)
-                pbar.update(1)
-    
-    print(f"✅ 成功生成 {len(full_ip_pool)} 个随机IP的大池")
-    
-    if test_ip_count > len(full_ip_pool):
-        print(f"⚠️ 警告: 测试IP数量({test_ip_count})大于IP池大小({len(full_ip_pool)})，使用全部IP")
-        test_ip_count = len(full_ip_pool)
-    
-    test_ip_pool = random.sample(list(full_ip_pool), test_ip_count)
-    print(f"🔧 从大池中随机选择 {len(test_ip_pool)} 个IP进行测试")
+    # 3. 获取测试IP池
+    test_ip_pool = get_test_ip_pool()
+    print(f"🔧 最终测试IP数量: {len(test_ip_pool)}")
 
     # 4. 第一阶段：延迟测试（筛选IP）
     ping_results = []
@@ -722,9 +799,10 @@ if __name__ == "__main__":
         f.write("\n".join([ip[0] for ip in passed_ips]))
     
     with open('results/full_results.csv', 'w') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
         for ip_data in enhanced_results:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']}\n")
+            source = "本地IP池" if CONFIG["LOCAL_IP_POOL"] else "Cloudflare"
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{source}\n")
     
     # 所有输出文件都使用统一格式
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
@@ -732,9 +810,10 @@ if __name__ == "__main__":
         f.write("\n".join(formatted_lines))
     
     with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
         for ip_data in sorted_ips:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']}\n")
+            source = "本地IP池" if CONFIG["LOCAL_IP_POOL"] else "Cloudflare"
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{source}\n")
 
     # 9. 按国家分组统计
     country_stats = {}
@@ -756,19 +835,23 @@ if __name__ == "__main__":
             country_stats[country]['avg_speed'] /= country_stats[country]['count']
 
     with open('results/country_stats.csv', 'w', encoding='utf-8') as f:
-        f.write("国家代码,IP数量,平均延迟(ms),平均速度(Mbps)\n")
+        f.write("国家代码,IP数量,平均延迟(ms),平均速度(Mbps),来源\n")
         for country, stats in country_stats.items():
-            f.write(f"{country},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f}\n")
+            source = "本地IP池" if CONFIG["LOCAL_IP_POOL"] else "Cloudflare"
+            f.write(f"{country},{stats['count']},{stats['avg_rtt']:.2f},{stats['avg_speed']:.2f},{source}\n")
 
     # 10. 显示统计结果
     print("\n" + "="*60)
     print(f"{'🔥 测试结果统计':^60}")
     print("="*60)
-    print(f"IP池大小: {ip_pool_size}")
     print(f"实际测试IP数: {len(ping_results)}")
     print(f"通过延迟测试IP数: {len(passed_ips)}")
     print(f"测速IP数: {len(enhanced_results)}")
     print(f"精选TOP IP: {len(sorted_ips)}")
+    print(f"IP来源: {'本地IP池' if CONFIG['LOCAL_IP_POOL'] else 'Cloudflare URL'}")
+    
+    if not CONFIG["LOCAL_IP_POOL"]:
+        print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
     
     print(f"\n🌍 国家分布 (基于真实地理位置API):")
     for country, stats in sorted(country_stats.items(), key=lambda x: x[1]['count'], reverse=True):
