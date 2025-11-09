@@ -21,8 +21,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ####################################################
 CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：PING/TCP/URL_TEST
-    "PING_TARGET": "http://www.gstatic.com/generate_204",  # Ping测试目标
-    "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
+    "PING_TARGET": "https://www.gstatic.com/generate_204",  # Ping测试目标
+    "URL_TEST_TARGET": "https://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 2,  # URL测试重试次数
     "PING_COUNT": 5,  # Ping次数
@@ -42,9 +42,9 @@ CONFIG = {
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
-        "http://www.gstatic.com/generate_204",
-        "http://cp.cloudflare.com/",
-        "http://www.cloudflare.com/favicon.ico"
+        "https://www.gstatic.com/generate_204",
+        "https://cp.cloudflare.com/",
+        "https://www.cloudflare.com/favicon.ico"
     ],
     
     # 国家代码到国旗的映射
@@ -503,27 +503,62 @@ def generate_ips_from_custom_pool(custom_data, target_count):
         if len(generated_ips) < target_count:
             generated_ips.add(ip)
     
-    # 2. 从CIDR段生成IP
+    # 2. 从CIDR段生成IP - 改进逻辑
     cidr_ranges = custom_data["cidr_ranges"]
     if cidr_ranges and len(generated_ips) < target_count:
-        cidr_ip_count = target_count - len(generated_ips)
-        ips_per_cidr = max(1, cidr_ip_count // len(cidr_ranges))
+        # 计算还需要生成多少IP
+        remaining_count = target_count - len(generated_ips)
         
-        for cidr in cidr_ranges:
+        # 为每个CIDR分配大致相等的IP数量
+        base_ips_per_cidr = max(1, remaining_count // len(cidr_ranges))
+        extra_ips = remaining_count % len(cidr_ranges)
+        
+        print(f"🔧 从 {len(cidr_ranges)} 个CIDR段生成IP，每个段生成 {base_ips_per_cidr}-{base_ips_per_cidr+1} 个IP")
+        
+        for i, cidr in enumerate(cidr_ranges):
             if len(generated_ips) >= target_count:
                 break
             try:
+                # 计算这个CIDR要生成多少个IP
+                ips_this_cidr = base_ips_per_cidr
+                if i < extra_ips:
+                    ips_this_cidr += 1
+                
                 network = ipaddress.ip_network(cidr, strict=False)
+                available_ips = network.num_addresses - 2  # 减去网络地址和广播地址
+                
+                # 如果CIDR太小，调整生成数量
+                if available_ips < ips_this_cidr:
+                    ips_this_cidr = max(1, available_ips)
+                
                 # 为每个CIDR生成指定数量的IP
-                for _ in range(ips_per_cidr):
+                for _ in range(ips_this_cidr):
                     if len(generated_ips) >= target_count:
                         break
                     ip = generate_random_ip(cidr)
-                    generated_ips.add(ip)
+                    if ip not in generated_ips:
+                        generated_ips.add(ip)
+                    else:
+                        # 如果IP重复，重试
+                        attempts = 0
+                        while len(generated_ips) < target_count and attempts < 10:
+                            ip = generate_random_ip(cidr)
+                            if ip not in generated_ips:
+                                generated_ips.add(ip)
+                                break
+                            attempts += 1
             except Exception as e:
                 print(f"⚠️ 从CIDR {cidr} 生成IP失败: {e}")
     
-    # 3. 解析域名（可选，需要网络请求）
+    # 3. 如果还不够，随机从CIDR中继续生成
+    if len(generated_ips) < target_count and cidr_ranges:
+        print(f"🔧 补充生成 {target_count - len(generated_ips)} 个IP...")
+        while len(generated_ips) < target_count:
+            cidr = random.choice(cidr_ranges)
+            ip = generate_random_ip(cidr)
+            generated_ips.add(ip)
+    
+    # 4. 解析域名（可选，需要网络请求）
     domains = custom_data["domains"]
     if domains and len(generated_ips) < target_count:
         print("🔍 解析自定义域名...")
@@ -542,6 +577,7 @@ def generate_ips_from_custom_pool(custom_data, target_count):
             except Exception as e:
                 print(f"⚠️ 解析域名 {domain} 失败: {e}")
     
+    print(f"✅ 自定义IP生成完成: {len(generated_ips)}/{target_count} 个IP")
     return list(generated_ips)
 
 def generate_complete_ip_pool():
@@ -688,10 +724,11 @@ def enhance_ip_with_country_info(ip_list):
     print("🌍 正在检测IP真实地理位置...")
     with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
         for ip_data in ip_list:
-            ip = ip_data[0]
-            rtt = ip_data[1]
-            loss = ip_data[2]
-            speed = ip_data[3] if len(ip_data) > 3 else 0
+            # 修正这里：ip_data现在是字典，不是元组
+            ip = ip_data['ip']  # 原来是 ip_data[0]
+            rtt = ip_data['rtt']
+            loss = ip_data['loss']
+            speed = ip_data.get('speed', 0)  # 使用get避免KeyError
             
             country_code = get_real_ip_country_code(ip)
             
@@ -701,6 +738,8 @@ def enhance_ip_with_country_info(ip_list):
                 'loss': loss,
                 'speed': speed,
                 'countryCode': country_code,
+                'source': ip_data.get('source', 'CLOUDFLARE'),
+                'type': ip_data.get('type', 'Unknown'),
                 'isp': "Cloudflare"
             }
             enhanced_ips.append(enhanced_ip)
