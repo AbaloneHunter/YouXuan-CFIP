@@ -23,13 +23,13 @@ CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
-    "URL_TEST_RETRY": 2,  # URL测试重试次数
+    "URL_TEST_RETRY": 0,  # URL测试重试次数
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "0~200",  # 延迟范围(ms)
+    "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 2500,  # 实际测试IP数量
+    "TEST_IP_COUNT": 5000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
