@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 from tqdm import tqdm
 import urllib3
 import ipaddress
-import re
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -28,7 +27,7 @@ CONFIG = {
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~200",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 500,  # 并发线程数
+    "THREADS": 300,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
     "TEST_IP_COUNT": 2000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
@@ -37,7 +36,14 @@ CONFIG = {
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "1,2,3",  # IP池来源选项: 1=域名+IP, 2=IP段, 3=Cloudflare IP池 (多选，逗号分隔)
+    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
+    
+    # 备用测试URL列表
+    "BACKUP_TEST_URLS": [
+        "http://www.gstatic.com/generate_204",
+        "http://cp.cloudflare.com/",
+        "http://www.cloudflare.com/favicon.ico"
+    ],
     
     # 国家代码到国旗的映射
     "COUNTRY_FLAGS": {
@@ -92,6 +98,18 @@ def get_real_ip_country_code(ip):
             'url': f'https://ipapi.co/{ip}/json/',
             'field': 'country_code',
             'check_field': 'country_code',
+            'check_value': None
+        },
+        {
+            'url': f'https://ip.useragentinfo.com/json?ip={ip}',
+            'field': 'country_code',
+            'check_field': 'country_code',
+            'check_value': None
+        },
+        {
+            'url': f'http://ipinfo.io/{ip}/json',
+            'field': 'country',
+            'check_field': 'country',
             'check_value': None
         }
     ]
@@ -357,35 +375,18 @@ def init_env():
     for key, value in CONFIG.items():
         os.environ[key] = str(value)
 
-def resolve_domain_to_ips(domain):
-    """
-    解析域名获取所有A记录的IP地址
-    """
-    try:
-        # 使用socket解析域名
-        ips = set()
-        result = socket.getaddrinfo(domain, None, socket.AF_INET)
-        for res in result:
-            ip = res[4][0]
-            ips.add(ip)
-        print(f"✅ 域名 {domain} 解析到 {len(ips)} 个IP")
-        return list(ips)
-    except Exception as e:
-        print(f"❌ 域名解析失败 {domain}: {e}")
-        return []
-
 def parse_custom_ips_file():
     """
-    解析自定义IP文件，支持域名、单个IP和IP段
-    返回: (individual_ips, ip_subnets, domains)
+    解析自定义IP文件，区分域名、单个IP和IP段
+    返回: (domains, individual_ips, ip_subnets)
     """
     custom_file = CONFIG["CUSTOM_IPS_FILE"]
+    domains = set()
     individual_ips = set()
     ip_subnets = set()
-    domains = set()
     
     if not custom_file or not os.path.exists(custom_file):
-        return individual_ips, ip_subnets, domains
+        return domains, individual_ips, ip_subnets
     
     print(f"🔧 读取自定义IP池文件: {custom_file}")
     try:
@@ -393,6 +394,11 @@ def parse_custom_ips_file():
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith('#'):
+                    continue
+                
+                # 检测是否为域名（包含字母）
+                if any(c.isalpha() for c in line):
+                    domains.add(line)
                     continue
                 
                 # 尝试解析为IP地址
@@ -407,22 +413,42 @@ def parse_custom_ips_file():
                 try:
                     network = ipaddress.ip_network(line, strict=False)
                     ip_subnets.add(str(network))
-                    continue
                 except ValueError:
-                    pass
-                
-                # 检查是否为域名格式
-                if re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$', line):
-                    domains.add(line)
-                else:
-                    print(f"⚠️ 第{line_num}行格式无法识别: {line}")
+                    print(f"⚠️ 第{line_num}行格式错误: {line}")
         
-        print(f"✅ 自定义IP池解析完成: {len(individual_ips)}个独立IP, {len(ip_subnets)}个IP段, {len(domains)}个域名")
+        print(f"✅ 自定义IP池解析完成: {len(domains)}个域名, {len(individual_ips)}个独立IP, {len(ip_subnets)}个IP段")
         
     except Exception as e:
         print(f"🚨 读取自定义IP池失败: {e}")
     
-    return individual_ips, ip_subnets, domains
+    return domains, individual_ips, ip_subnets
+
+def resolve_domains_to_ips(domains):
+    """
+    将域名解析为IP地址
+    """
+    resolved_ips = set()
+    
+    if not domains:
+        return resolved_ips
+    
+    print(f"🔧 解析 {len(domains)} 个域名...")
+    with tqdm(total=len(domains), desc="域名解析", unit="域名") as pbar:
+        for domain in domains:
+            try:
+                # 解析域名获取IP地址
+                ips = socket.getaddrinfo(domain, None, socket.AF_INET)
+                for ip_info in ips:
+                    ip = ip_info[4][0]
+                    resolved_ips.add(ip)
+                    custom_ip_sources[ip] = 'custom'
+            except Exception as e:
+                print(f"⚠️ 域名解析失败 {domain}: {e}")
+            finally:
+                pbar.update(1)
+    
+    print(f"✅ 域名解析完成: 获得 {len(resolved_ips)} 个IP")
+    return resolved_ips
 
 def fetch_ip_ranges():
     """获取Cloudflare官方IP段"""
@@ -454,101 +480,80 @@ def generate_random_ip(subnet):
 
 def generate_ip_pool():
     """
-    生成IP池：根据配置选项组合不同来源的IP
+    根据配置的IP池来源生成IP池
     """
-    # 解析IP池来源选项
-    sources = [s.strip() for s in CONFIG["IP_POOL_SOURCES"].split(',')]
-    print(f"📊 IP池来源配置: {sources}")
+    sources_config = CONFIG["IP_POOL_SOURCES"]
+    sources = [s.strip() for s in sources_config.split(',')]
+    
+    print(f"📊 IP池来源配置: {sources_config}")
     
     total_ip_pool = set()
     
-    # 1. 域名+独立IP来源
+    # 1. 自定义域名和IP
     if '1' in sources:
-        custom_individual_ips, custom_subnets, domains = parse_custom_ips_file()
-        
-        # 解析域名获取IP
-        domain_ips = set()
-        if domains:
-            print(f"🔧 解析 {len(domains)} 个域名...")
-            for domain in domains:
-                resolved_ips = resolve_domain_to_ips(domain)
-                for ip in resolved_ips:
-                    domain_ips.add(ip)
-                    custom_ip_sources[ip] = 'custom_domain'
-        
+        domains, individual_ips, _ = parse_custom_ips_file()
+        # 解析域名
+        resolved_ips = resolve_domains_to_ips(domains)
         # 添加独立IP
-        for ip in custom_individual_ips:
-            total_ip_pool.add(ip)
-            custom_ip_sources[ip] = 'custom_ip'
+        for ip in individual_ips:
+            resolved_ips.add(ip)
+            custom_ip_sources[ip] = 'custom'
         
-        # 添加域名解析的IP
-        for ip in domain_ips:
-            total_ip_pool.add(ip)
-            custom_ip_sources[ip] = 'custom_domain'
-        
-        print(f"✅ 来源1完成: {len(custom_individual_ips)}个独立IP + {len(domain_ips)}个域名IP")
+        total_ip_pool.update(resolved_ips)
+        print(f"✅ 来源1 - 自定义域名和IP: {len(resolved_ips)} 个IP")
     
-    # 2. IP段来源
+    # 2. 自定义IP段
     if '2' in sources:
-        custom_individual_ips, custom_subnets, domains = parse_custom_ips_file()
+        _, _, custom_subnets = parse_custom_ips_file()
+        custom_ip_count = CONFIG["IP_POOL_SIZE"] // 3  # 分配1/3给自定义IP段
         
-        ip_subnet_ips = set()
+        custom_ip_pool = set()
         if custom_subnets:
             print(f"🔧 从 {len(custom_subnets)} 个自定义IP段生成IP...")
-            # 从每个IP段生成适量IP
-            ips_per_subnet = max(1, CONFIG["IP_POOL_SIZE"] // (len(custom_subnets) * 10))
-            
-            for subnet in custom_subnets:
-                for _ in range(ips_per_subnet):
+            with tqdm(total=min(custom_ip_count, len(custom_subnets) * 10), 
+                     desc="生成自定义IP段", unit="IP") as pbar:
+                while len(custom_ip_pool) < custom_ip_count and custom_subnets:
+                    subnet = random.choice(list(custom_subnets))
                     ip = generate_random_ip(subnet)
-                    if ip not in ip_subnet_ips:
-                        ip_subnet_ips.add(ip)
-                        custom_ip_sources[ip] = 'custom_subnet'
+                    if ip not in custom_ip_pool:
+                        custom_ip_pool.add(ip)
+                        custom_ip_sources[ip] = 'custom'
+                        pbar.update(1)
         
-        # 添加IP段生成的IP
-        for ip in ip_subnet_ips:
-            total_ip_pool.add(ip)
-        
-        print(f"✅ 来源2完成: {len(ip_subnet_ips)}个IP段IP")
+        total_ip_pool.update(custom_ip_pool)
+        print(f"✅ 来源2 - 自定义IP段: {len(custom_ip_pool)} 个IP")
     
-    # 3. Cloudflare IP池来源
+    # 3. 官方IP池
     if '3' in sources:
         cf_subnets = fetch_ip_ranges()
         if not cf_subnets:
             print("❌ 无法获取Cloudflare IP段")
         else:
+            cf_ip_count = CONFIG["IP_POOL_SIZE"] // 2  # 分配1/2给官方IP
+            
+            cf_ip_pool = set()
             print(f"🔧 从 {len(cf_subnets)} 个Cloudflare IP段生成IP...")
+            with tqdm(total=cf_ip_count, desc="生成官方IP", unit="IP") as pbar:
+                while len(cf_ip_pool) < cf_ip_count:
+                    subnet = random.choice(cf_subnets)
+                    ip = generate_random_ip(subnet)
+                    if ip not in cf_ip_pool and ip not in total_ip_pool:
+                        cf_ip_pool.add(ip)
+                        custom_ip_sources[ip] = 'cloudflare'
+                        pbar.update(1)
             
-            # 计算需要生成的Cloudflare IP数量
-            current_size = len(total_ip_pool)
-            cf_target_size = CONFIG["IP_POOL_SIZE"] - current_size
-            
-            if cf_target_size > 0:
-                cf_ip_pool = set()
-                with tqdm(total=cf_target_size, desc="生成Cloudflare IP", unit="IP") as pbar:
-                    while len(cf_ip_pool) < cf_target_size and len(cf_subnets) > 0:
-                        subnet = random.choice(cf_subnets)
-                        ip = generate_random_ip(subnet)
-                        if ip not in total_ip_pool and ip not in cf_ip_pool:
-                            cf_ip_pool.add(ip)
-                            custom_ip_sources[ip] = 'cloudflare'
-                            pbar.update(1)
-                
-                # 添加Cloudflare IP
-                for ip in cf_ip_pool:
-                    total_ip_pool.add(ip)
-                
-                print(f"✅ 来源3完成: {len(cf_ip_pool)}个Cloudflare IP")
+            total_ip_pool.update(cf_ip_pool)
+            print(f"✅ 来源3 - 官方IP池: {len(cf_ip_pool)} 个IP")
     
-    # 转换为列表并随机打乱
     full_ip_pool = list(total_ip_pool)
     random.shuffle(full_ip_pool)
+    
+    print(f"✅ IP池生成完成: 总计 {len(full_ip_pool)} 个IP")
     
     # 抽样测试IP
     test_ip_count = min(CONFIG["TEST_IP_COUNT"], len(full_ip_pool))
     test_ip_pool = random.sample(full_ip_pool, test_ip_count)
-    
-    print(f"✅ IP池生成完成: 总计 {len(full_ip_pool)} 个IP, 测试 {len(test_ip_pool)} 个IP")
+    print(f"🔧 随机选择 {len(test_ip_pool)} 个IP进行测试")
     
     return test_ip_pool
 
@@ -617,7 +622,7 @@ def format_ip_output(ip_data, port=None):
     flag = CONFIG["COUNTRY_FLAGS"].get(country_code, '🏴')
     
     # 添加自定义IP标志
-    custom_flag = '✓' if ip_data.get('source') != 'cloudflare' else ''
+    custom_flag = '✓' if ip_data.get('source') == 'custom' else ''
     
     return f"{ip_data['ip']}:{port}#{flag} {country_code}{custom_flag}"
 
@@ -661,6 +666,7 @@ if __name__ == "__main__":
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称✓ (✓表示自定义IP)")
     print(f"IP池来源: {CONFIG['IP_POOL_SOURCES']}")
+    print(f"地理位置API: 启用")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -684,7 +690,7 @@ if __name__ == "__main__":
     print(f"测速URL: {CONFIG['SPEED_URL']}")
     print("="*60 + "\n")
 
-    # 2. 生成IP池（根据配置选项）
+    # 2. 生成IP池（根据配置的多种来源）
     test_ip_pool = generate_ip_pool()
     if not test_ip_pool:
         print("❌ 无法生成IP池，程序终止")
@@ -788,14 +794,14 @@ if __name__ == "__main__":
     print(f"精选TOP IP: {len(sorted_ips)}")
     
     if sorted_ips:
-        print(f"\n🏆【最佳IP TOP10】(按延迟升序排列, ✓表示自定义IP)")
+        print(f"\n🏆【最佳IP TOP10】(按延迟升序排列，✓表示自定义IP)")
         formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
         for i, formatted_ip in enumerate(formatted_top_ips, 1):
             ip_data = sorted_ips[i-1]
-            source_info = f" [{ip_data.get('source', 'cloudflare')}]" 
+            source_info = " [自定义]" if ip_data.get('source') == 'custom' else ""
             print(f"{i:2d}. {formatted_ip} (延迟:{ip_data['rtt']:.1f}ms, 速度:{ip_data['speed']:.1f}Mbps{source_info})")
         
-        print(f"\n📋【全部精选IP】(按延迟升序排列, ✓表示自定义IP)")
+        print(f"\n📋【全部精选IP】(按延迟升序排列，✓表示自定义IP)")
         formatted_all_ips = format_ip_list_for_display(sorted_ips)
         for i in range(0, len(formatted_all_ips), 2):
             line_ips = formatted_all_ips[i:i+2]
@@ -806,5 +812,5 @@ if __name__ == "__main__":
     print("📊 文件说明:")
     print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 国家简称✓)")
     print("   - top_ips_details.csv: 详细性能数据")
-    print("   - full_results.csv: 完整测试结果")
+    print("🗑️  结果已按延迟升序排列")
     print("="*60)
