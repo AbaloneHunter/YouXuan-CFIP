@@ -23,7 +23,7 @@ CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
-    "URL_TEST_RETRY": 0,  # URL测试重试次数
+    "URL_TEST_RETRY": 1,  # URL测试重试次数
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
