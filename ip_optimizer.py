@@ -25,7 +25,7 @@ CONFIG = {
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 2,  # URL测试重试次数
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "0~100",  # 延迟范围(ms)
+    "RTT_RANGE": "0~400",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
     "THREADS": 300,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
@@ -106,11 +106,13 @@ CONFIG = {
         "CLOUDFLARE": "👋" # Cloudflare官方IP
     },
     
-    # IP地理位置API配置
+    # IP地理位置API配置 - 增强配置
     "IP_GEO_API": {
-        "timeout": 3,
-        "retry": 2,
-        "enable_cache": True
+        "timeout": 5,  # 增加超时时间
+        "retry": 3,    # 增加重试次数
+        "enable_cache": True,
+        "delay_between_requests": 0.1,  # 请求间隔避免限流
+        "max_workers": 50  # 减少并发数避免API限制
     }
 }
 
@@ -118,52 +120,127 @@ CONFIG = {
 ip_geo_cache = {}
 
 ####################################################
-# IP地理位置查询函数 - 简化版本
+# IP地理位置查询函数 - 增强版本
 ####################################################
 
 def get_real_ip_country_code(ip):
     """
-    使用ipapi.co API检测IP国家代码 - 稳定精准
+    增强版IP地理位置查询 - 多API冗余 + 智能重试
     """
     # 检查缓存
     if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
         return ip_geo_cache[ip]
     
-    # 使用ipapi.co API - 稳定且精准
-    api_url = f"https://ipapi.co/{ip}/json/"
+    # API列表 - 按优先级排序
+    apis = [
+        {
+            'name': 'ipapi.co',
+            'url': f"https://ipapi.co/{ip}/json/",
+            'field': 'country_code',
+            'headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        },
+        {
+            'name': 'ip-api.com', 
+            'url': f"http://ip-api.com/json/{ip}?fields=status,message,countryCode",
+            'field': 'countryCode',
+            'check_field': 'status',
+            'check_value': 'success'
+        },
+        {
+            'name': 'ipapi.com',
+            'url': f"https://ipapi.com/ip_api.php?ip={ip}",
+            'field': 'country_code',
+            'headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        }
+    ]
     
-    try:
-        response = requests.get(api_url, timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
-        if response.status_code == 200:
-            data = response.json()
-            country_code = data.get('country_code')
+    for api in apis:
+        for attempt in range(CONFIG["IP_GEO_API"]["retry"]):
+            try:
+                # 添加请求间隔避免限流
+                if attempt > 0:
+                    time.sleep(1)
+                
+                headers = api.get('headers', {})
+                if not headers:
+                    headers = {'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)'}
+                
+                response = requests.get(
+                    api['url'], 
+                    headers=headers,
+                    timeout=CONFIG["IP_GEO_API"]["timeout"], 
+                    verify=False
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # 检查API特定条件
+                    if api.get('check_field') and api.get('check_value'):
+                        if data.get(api['check_field']) != api['check_value']:
+                            continue
+                    
+                    country_code = data.get(api['field'])
+                    if country_code and country_code != 'UN' and country_code != 'None':
+                        # 标准化国家代码
+                        country_code = country_code.upper()
+                        
+                        # 缓存结果
+                        if CONFIG["IP_GEO_API"]["enable_cache"]:
+                            ip_geo_cache[ip] = country_code
+                        
+                        print(f"✅ {ip} -> {country_code} (via {api['name']})")
+                        return country_code
+                        
+            except requests.exceptions.Timeout:
+                print(f"⏰ {ip} API超时 ({api['name']})")
+                continue
+            except requests.exceptions.ConnectionError:
+                print(f"🔌 {ip} 连接错误 ({api['name']})")
+                continue
+            except Exception as e:
+                print(f"⚠️ {ip} API错误 {api['name']}: {str(e)[:50]}")
+                continue
             
-            if country_code:
-                # 缓存结果
-                if CONFIG["IP_GEO_API"]["enable_cache"]:
-                    ip_geo_cache[ip] = country_code
-                return country_code
-    except Exception as e:
-        # 如果ipapi.co失败，尝试备用API
-        pass
+            # 短暂延迟
+            time.sleep(CONFIG["IP_GEO_API"]["delay_between_requests"])
     
-    # 备用API：ip-api.com
-    try:
-        backup_url = f"http://ip-api.com/json/{ip}?fields=status,message,countryCode"
-        response = requests.get(backup_url, timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('status') == 'success':
-                country_code = data.get('countryCode')
-                if country_code:
-                    if CONFIG["IP_GEO_API"]["enable_cache"]:
-                        ip_geo_cache[ip] = country_code
-                    return country_code
-    except Exception:
-        pass
-    
-    # 如果所有API都失败，返回未知
+    # 如果所有API都失败，记录并返回未知
+    print(f"❌ {ip} 所有地理API查询失败")
     return 'UN'
+
+def batch_geo_lookup(ip_list):
+    """
+    批量地理查询 - 控制并发避免API限制
+    """
+    results = []
+    
+    print(f"🌍 开始批量地理查询 ({len(ip_list)}个IP)...")
+    print("💡 提示: 地理查询可能需要较长时间，请耐心等待")
+    
+    with ThreadPoolExecutor(max_workers=CONFIG["IP_GEO_API"]["max_workers"]) as executor:
+        future_to_ip = {executor.submit(get_real_ip_country_code, ip_data["ip"]): ip_data for ip_data in ip_list}
+        
+        with tqdm(
+            total=len(ip_list),
+            desc="地理位置查询",
+            unit="IP",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+        ) as pbar:
+            for future in as_completed(future_to_ip):
+                ip_data = future_to_ip[future]
+                try:
+                    country_code = future.result()
+                    ip_data['countryCode'] = country_code
+                    results.append(ip_data)
+                except Exception as e:
+                    print(f"\n🔧 地理查询异常: {e}")
+                    ip_data['countryCode'] = 'UN'
+                    results.append(ip_data)
+                finally:
+                    pbar.update(1)
+    
+    return results
 
 ####################################################
 # URL测试函数
@@ -392,7 +469,7 @@ def speed_test(ip):
         return 0.0
 
 ####################################################
-# 核心功能函数 - 使用您提供的自定义IP方法
+# 核心功能函数
 ####################################################
 
 def init_env():
@@ -613,36 +690,13 @@ def full_test(ip_data):
 
 def enhance_ip_with_country_info(ip_list):
     """
-    为IP列表添加真实的国家代码信息
+    为IP列表添加真实的国家代码信息 - 使用批量查询
     """
-    enhanced_ips = []
-    
-    print("🌍 正在检测IP真实地理位置...")
-    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
-        for ip_data in ip_list:
-            ip = ip_data["ip"]  # 修正：从字典获取IP
-            rtt = ip_data["rtt"]
-            loss = ip_data["loss"]
-            speed = ip_data.get("speed", 0)
-            
-            country_code = get_real_ip_country_code(ip)
-            
-            enhanced_ip = {
-                'ip': ip,
-                'rtt': rtt,
-                'loss': loss,
-                'speed': speed,
-                'countryCode': country_code,
-                'isp': "Cloudflare",
-                'source': ip_data.get('source', 'CLOUDFLARE')
-            }
-            enhanced_ips.append(enhanced_ip)
-            pbar.update(1)
-    
-    return enhanced_ips
+    print("🌍 开始增强IP地理位置信息...")
+    return batch_geo_lookup(ip_list)
 
 ####################################################
-# 格式化输出函数 - 修改：添加国家名称
+# 格式化输出函数
 ####################################################
 
 def format_ip_output(ip_data, port=None):
@@ -737,7 +791,7 @@ if __name__ == "__main__":
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#来源标志国旗 国家名称·国家简称")
     print(f"来源标志: 👏=自定义 👋=Cloudflare官方")
-    print(f"地理位置API: ipapi.co (精简稳定)")
+    print(f"地理位置API: 多API冗余 (提高成功率)")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -821,8 +875,15 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 6. 为IP添加真实国家代码信息
+    # 6. 为IP添加真实国家代码信息 - 使用增强版
     enhanced_results = enhance_ip_with_country_info(full_results)
+
+    # 统计地理查询成功率
+    known_countries = len([ip for ip in enhanced_results if ip['countryCode'] != 'UN'])
+    unknown_countries = len([ip for ip in enhanced_results if ip['countryCode'] == 'UN'])
+    success_rate = (known_countries / len(enhanced_results)) * 100 if enhanced_results else 0
+    
+    print(f"📊 地理查询统计: 成功 {known_countries}, 未知 {unknown_countries}, 成功率 {success_rate:.1f}%")
 
     # 7. 按性能排序：精选IP（延迟升序，速度降序）
     sorted_ips = sorted(
@@ -902,6 +963,7 @@ if __name__ == "__main__":
     print(f"通过延迟测试IP数: {len(enhanced_results)}")
     print(f"精选IP总数: {len(sorted_ips)}")
     print(f"最佳IP数量: {len(best_ips)} (前{top_limit}个)")
+    print(f"地理查询成功率: {success_rate:.1f}%")
 
     print(f"\n📊 来源分布:")
     for source, stats in source_stats.items():
