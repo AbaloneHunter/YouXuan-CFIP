@@ -95,8 +95,8 @@ CONFIG = {
         'EG': {'flag': '🇪🇬', 'name': '埃及'},
         'NG': {'flag': '🇳🇬', 'name': '尼日利亚'},
         'KE': {'flag': '🇰🇪', 'name': '肯尼亚'},
-        'CN': {'flag': '⭐', 'name': '中·国'},      # 修改：中国使用⭐
-        'TW': {'flag': '🌶️', 'name': '台·湾'},     # 修改：台湾使用🌶️
+        'CN': {'flag': '⭐', 'name': '中·国'},      # 中国使用⭐
+        'TW': {'flag': '🌶️', 'name': '台·湾'},     # 台湾使用🌶️
         'UN': {'flag': '🏴', 'name': '未知'}        # 未知国家
     },
     
@@ -118,6 +118,9 @@ CONFIG = {
 
 # IP地理位置缓存
 ip_geo_cache = {}
+
+# 自定义IP标记跟踪
+custom_ip_sources = {}  # 记录每个IP的来源：'custom' 或 'cloudflare'
 
 ####################################################
 # IP地理位置查询函数 - 增强版本
@@ -189,24 +192,19 @@ def get_real_ip_country_code(ip):
                         if CONFIG["IP_GEO_API"]["enable_cache"]:
                             ip_geo_cache[ip] = country_code
                         
-                        print(f"✅ {ip} -> {country_code} (via {api['name']})")
                         return country_code
                         
             except requests.exceptions.Timeout:
-                print(f"⏰ {ip} API超时 ({api['name']})")
                 continue
             except requests.exceptions.ConnectionError:
-                print(f"🔌 {ip} 连接错误 ({api['name']})")
                 continue
-            except Exception as e:
-                print(f"⚠️ {ip} API错误 {api['name']}: {str(e)[:50]}")
+            except Exception:
                 continue
             
             # 短暂延迟
             time.sleep(CONFIG["IP_GEO_API"]["delay_between_requests"])
     
-    # 如果所有API都失败，记录并返回未知
-    print(f"❌ {ip} 所有地理API查询失败")
+    # 如果所有API都失败，返回未知
     return 'UN'
 
 def batch_geo_lookup(ip_list):
@@ -215,8 +213,7 @@ def batch_geo_lookup(ip_list):
     """
     results = []
     
-    print(f"🌍 开始批量地理查询 ({len(ip_list)}个IP)...")
-    print("💡 提示: 地理查询可能需要较长时间，请耐心等待")
+    print("🌍 正在检测IP真实地理位置...")
     
     with ThreadPoolExecutor(max_workers=CONFIG["IP_GEO_API"]["max_workers"]) as executor:
         future_to_ip = {executor.submit(get_real_ip_country_code, ip_data["ip"]): ip_data for ip_data in ip_list}
@@ -234,7 +231,6 @@ def batch_geo_lookup(ip_list):
                     ip_data['countryCode'] = country_code
                     results.append(ip_data)
                 except Exception as e:
-                    print(f"\n🔧 地理查询异常: {e}")
                     ip_data['countryCode'] = 'UN'
                     results.append(ip_data)
                 finally:
@@ -581,11 +577,15 @@ def generate_ip_pool():
     print(f"📊 IP池分配: 自定义IP {custom_ip_count}个, Cloudflare IP {cf_ip_count}个")
     
     # 生成自定义IP池
-    custom_ip_pool = set()
+    custom_ip_pool = []
     if custom_individual_ips:
         # 添加独立IP
         for ip in custom_individual_ips:
-            custom_ip_pool.add(ip)
+            custom_ip_pool.append({
+                "ip": ip,
+                "source": "CUSTOM"
+            })
+            custom_ip_sources[ip] = 'custom'
     
     if custom_subnets:
         print(f"🔧 从 {len(custom_subnets)} 个自定义IP段生成IP...")
@@ -610,37 +610,30 @@ def generate_ip_pool():
                     if len(custom_ip_pool) >= custom_ip_count:
                         break
                     ip = generate_random_ip(subnet)
-                    if ip not in custom_ip_pool:
-                        custom_ip_pool.add(ip)
+                    if ip not in [item["ip"] for item in custom_ip_pool]:
+                        custom_ip_pool.append({
+                            "ip": ip,
+                            "source": "CUSTOM"
+                        })
+                        custom_ip_sources[ip] = 'custom'
     
     # 生成Cloudflare IP池
-    cf_ip_pool = set()
+    cf_ip_pool = []
     print(f"🔧 从 {len(cf_subnets)} 个Cloudflare IP段生成IP...")
     with tqdm(total=cf_ip_count, desc="生成Cloudflare IP", unit="IP") as pbar:
         while len(cf_ip_pool) < cf_ip_count:
             subnet = random.choice(cf_subnets)
             ip = generate_random_ip(subnet)
-            if ip not in cf_ip_pool and ip not in custom_ip_pool:
-                cf_ip_pool.add(ip)
+            if ip not in [item["ip"] for item in cf_ip_pool] and ip not in [item["ip"] for item in custom_ip_pool]:
+                cf_ip_pool.append({
+                    "ip": ip,
+                    "source": "CLOUDFLARE"
+                })
+                custom_ip_sources[ip] = 'cloudflare'
                 pbar.update(1)
     
     # 合并IP池并标记来源
-    full_ip_pool = []
-    
-    # 标记自定义IP
-    for ip in custom_ip_pool:
-        full_ip_pool.append({
-            "ip": ip,
-            "source": "CUSTOM"
-        })
-    
-    # 标记Cloudflare官方IP
-    for ip in cf_ip_pool:
-        full_ip_pool.append({
-            "ip": ip,
-            "source": "CLOUDFLARE"
-        })
-    
+    full_ip_pool = custom_ip_pool + cf_ip_pool
     random.shuffle(full_ip_pool)
     
     print(f"✅ IP池生成完成: 总计 {len(full_ip_pool)} 个IP")
@@ -696,7 +689,7 @@ def enhance_ip_with_country_info(ip_list):
     return batch_geo_lookup(ip_list)
 
 ####################################################
-# 格式化输出函数
+# 格式化输出函数 - 修改：添加国家名称
 ####################################################
 
 def format_ip_output(ip_data, port=None):
