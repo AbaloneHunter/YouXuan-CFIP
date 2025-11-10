@@ -27,7 +27,7 @@ CONFIG = {
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~200",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 500,  # 并发线程数
+    "THREADS": 300,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
     "TEST_IP_COUNT": 2000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
@@ -38,6 +38,7 @@ CONFIG = {
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
     "GEO_TEST_URL": "https://ping0.co/",  # 地区测试URL
+    "GEO_TEST_TIMEOUT": 10,  # 地区测试超时时间(秒)
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -82,7 +83,7 @@ def get_ip_region_from_ping0(ip):
         return ip_geo_cache[ip]
     
     geo_url = CONFIG["GEO_TEST_URL"]
-    timeout = CONFIG["URL_TEST_TIMEOUT"]
+    timeout = CONFIG["GEO_TEST_TIMEOUT"]  # 使用10秒超时
     
     try:
         # 解析URL获取主机名
@@ -137,6 +138,9 @@ def get_ip_region_from_ping0(ip):
         ip_geo_cache[ip] = country_code
         return country_code
         
+    except socket.timeout:
+        print(f"⏰ 地区测试超时: {ip} (超过{timeout}秒)")
+        return 'UN'
     except Exception as e:
         # 如果ping0.co测试失败，回退到传统API
         return get_ip_region_fallback(ip)
@@ -148,6 +152,11 @@ def extract_country_from_response(response, response_data):
     # 尝试从响应头中获取地区信息
     server_header = response.getheader('Server', '').lower()
     via_header = response.getheader('Via', '').lower()
+    x_country_header = response.getheader('X-Country', '').upper()
+    
+    # 如果有X-Country头，直接使用
+    if x_country_header in CONFIG["COUNTRY_FLAGS"]:
+        return x_country_header
     
     # 检查常见的地区标识
     if 'china' in server_header or 'cn' in server_header:
@@ -166,6 +175,14 @@ def extract_country_from_response(response, response_data):
         return 'DE'
     elif 'korea' in server_header or 'kr' in server_header:
         return 'KR'
+    elif 'united kingdom' in server_header or 'uk' in server_header or 'gb' in server_header:
+        return 'GB'
+    elif 'france' in server_header or 'fr' in server_header:
+        return 'FR'
+    elif 'canada' in server_header or 'ca' in server_header:
+        return 'CA'
+    elif 'australia' in server_header or 'au' in server_header:
+        return 'AU'
     
     # 检查Via头中的地区信息
     if 'china' in via_header or 'cn' in via_header:
@@ -174,20 +191,37 @@ def extract_country_from_response(response, response_data):
         return 'TW'
     elif 'hongkong' in via_header or 'hk' in via_header:
         return 'HK'
+    elif 'japan' in via_header or 'jp' in via_header:
+        return 'JP'
+    elif 'singapore' in via_header or 'sg' in via_header:
+        return 'SG'
     
     # 如果无法从头部获取，尝试分析响应内容
-    if any(keyword in response_data.lower() for keyword in ['china', 'beijing', 'shanghai', 'guangzhou']):
+    content_lower = response_data.lower()
+    if any(keyword in content_lower for keyword in ['china', 'beijing', 'shanghai', 'guangzhou', 'shenzhen']):
         return 'CN'
-    elif any(keyword in response_data.lower() for keyword in ['taiwan', 'taipei']):
+    elif any(keyword in content_lower for keyword in ['taiwan', 'taipei']):
         return 'TW'
-    elif any(keyword in response_data.lower() for keyword in ['hong kong', 'hongkong']):
+    elif any(keyword in content_lower for keyword in ['hong kong', 'hongkong']):
         return 'HK'
-    elif any(keyword in response_data.lower() for keyword in ['japan', 'tokyo', 'osaka']):
+    elif any(keyword in content_lower for keyword in ['japan', 'tokyo', 'osaka']):
         return 'JP'
-    elif any(keyword in response_data.lower() for keyword in ['singapore']):
+    elif any(keyword in content_lower for keyword in ['singapore']):
         return 'SG'
-    elif any(keyword in response_data.lower() for keyword in ['usa', 'united states']):
+    elif any(keyword in content_lower for keyword in ['usa', 'united states', 'new york', 'los angeles']):
         return 'US'
+    elif any(keyword in content_lower for keyword in ['germany', 'frankfurt', 'berlin']):
+        return 'DE'
+    elif any(keyword in content_lower for keyword in ['korea', 'seoul']):
+        return 'KR'
+    elif any(keyword in content_lower for keyword in ['united kingdom', 'london']):
+        return 'GB'
+    elif any(keyword in content_lower for keyword in ['france', 'paris']):
+        return 'FR'
+    elif any(keyword in content_lower for keyword in ['canada', 'toronto', 'vancouver']):
+        return 'CA'
+    elif any(keyword in content_lower for keyword in ['australia', 'sydney', 'melbourne']):
+        return 'AU'
     
     return 'UN'
 
@@ -212,7 +246,7 @@ def get_ip_region_fallback(ip):
     
     for api in apis:
         try:
-            response = requests.get(api['url'], timeout=3, verify=False)
+            response = requests.get(api['url'], timeout=5, verify=False)  # 备用API使用5秒超时
             if response.status_code == 200:
                 data = response.json()
                 
@@ -683,7 +717,7 @@ def enhance_ip_with_country_info(ip_list):
     """
     enhanced_ips = []
     
-    print("🌍 正在通过ping0.co检测IP地区信息...")
+    print(f"🌍 正在通过ping0.co检测IP地区信息 (超时:{CONFIG['GEO_TEST_TIMEOUT']}秒)...")
     with tqdm(total=len(ip_list), desc="IP地区检测", unit="IP") as pbar:
         for ip_data in ip_list:
             ip = ip_data[0]
@@ -766,7 +800,7 @@ if __name__ == "__main__":
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称✓ (✓表示自定义IP)")
     print(f"IP池来源: {CONFIG['IP_POOL_SOURCES']}")
-    print(f"地区检测: 使用ping0.co直连测试")
+    print(f"地区检测: 使用ping0.co直连测试 (超时:{CONFIG['GEO_TEST_TIMEOUT']}秒)")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -913,5 +947,5 @@ if __name__ == "__main__":
     print("📊 文件说明:")
     print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 国家简称✓)")
     print("   - top_ips_details.csv: 详细性能数据")
-    print("🌍 地区信息通过ping0.co直连测试获取")
+    print(f"🌍 地区信息通过ping0.co直连测试获取 (超时:{CONFIG['GEO_TEST_TIMEOUT']}秒)")
     print("="*60)
