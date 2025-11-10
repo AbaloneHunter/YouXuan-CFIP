@@ -25,7 +25,7 @@ CONFIG = {
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 2,  # URL测试重试次数
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "0~400",  # 延迟范围(ms)
+    "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 2.0,  # 最大丢包率(%)
     "THREADS": 300,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
@@ -44,19 +44,60 @@ CONFIG = {
         "http://www.cloudflare.com/favicon.ico"
     ],
     
-    # 国家代码到国旗的映射
-    "COUNTRY_FLAGS": {
-        'US': '🇺🇸', 'SG': '🇸🇬', 'JP': '🇯🇵', 'HK': '🇭🇰', 'KR': '🇰🇷',
-        'DE': '🇩🇪', 'GB': '🇬🇧', 'FR': '🇫🇷', 'CA': '🇨🇦', 'AU': '🇦🇺',
-        'NL': '🇳🇱', 'SE': '🇸🇪', 'FI': '🇫🇮', 'NO': '🇳🇴', 'DK': '🇩🇰',
-        'CH': '🇨🇭', 'IT': '🇮🇹', 'ES': '🇪🇸', 'PT': '🇵🇹', 'BE': '🇧🇪',
-        'AT': '🇦🇹', 'IE': '🇮🇪', 'PL': '🇵🇱', 'CZ': '🇨🇿', 'HU': '🇭🇺',
-        'RO': '🇷🇴', 'BG': '🇧🇬', 'GR': '🇬🇷', 'TR': '🇹🇷', 'RU': '🇷🇺',
-        'UA': '🇺🇦', 'IL': '🇮🇱', 'AE': '🇦🇪', 'SA': '🇸🇦', 'IN': '🇮🇳',
-        'TH': '🇹🇭', 'MY': '🇲🇾', 'ID': '🇮🇩', 'VN': '🇻🇳', 'PH': '🇵🇭',
-        'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
-        'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
-        'UN': '🏴'  # 未知国家
+    # 国家代码到国旗和国家名称的映射
+    "COUNTRY_INFO": {
+        'US': {'flag': '🇺🇸', 'name': '美国'},
+        'SG': {'flag': '🇸🇬', 'name': '新加坡'},
+        'JP': {'flag': '🇯🇵', 'name': '日本'},
+        'HK': {'flag': '🇭🇰', 'name': '香港'},
+        'KR': {'flag': '🇰🇷', 'name': '韩国'},
+        'DE': {'flag': '🇩🇪', 'name': '德国'},
+        'GB': {'flag': '🇬🇧', 'name': '英国'},
+        'FR': {'flag': '🇫🇷', 'name': '法国'},
+        'CA': {'flag': '🇨🇦', 'name': '加拿大'},
+        'AU': {'flag': '🇦🇺', 'name': '澳大利亚'},
+        'NL': {'flag': '🇳🇱', 'name': '荷兰'},
+        'SE': {'flag': '🇸🇪', 'name': '瑞典'},
+        'FI': {'flag': '🇫🇮', 'name': '芬兰'},
+        'NO': {'flag': '🇳🇴', 'name': '挪威'},
+        'DK': {'flag': '🇩🇰', 'name': '丹麦'},
+        'CH': {'flag': '🇨🇭', 'name': '瑞士'},
+        'IT': {'flag': '🇮🇹', 'name': '意大利'},
+        'ES': {'flag': '🇪🇸', 'name': '西班牙'},
+        'PT': {'flag': '🇵🇹', 'name': '葡萄牙'},
+        'BE': {'flag': '🇧🇪', 'name': '比利时'},
+        'AT': {'flag': '🇦🇹', 'name': '奥地利'},
+        'IE': {'flag': '🇮🇪', 'name': '爱尔兰'},
+        'PL': {'flag': '🇵🇱', 'name': '波兰'},
+        'CZ': {'flag': '🇨🇿', 'name': '捷克'},
+        'HU': {'flag': '🇭🇺', 'name': '匈牙利'},
+        'RO': {'flag': '🇷🇴', 'name': '罗马尼亚'},
+        'BG': {'flag': '🇧🇬', 'name': '保加利亚'},
+        'GR': {'flag': '🇬🇷', 'name': '希腊'},
+        'TR': {'flag': '🇹🇷', 'name': '土耳其'},
+        'RU': {'flag': '🇷🇺', 'name': '俄罗斯'},
+        'UA': {'flag': '🇺🇦', 'name': '乌克兰'},
+        'IL': {'flag': '🇮🇱', 'name': '以色列'},
+        'AE': {'flag': '🇦🇪', 'name': '阿联酋'},
+        'SA': {'flag': '🇸🇦', 'name': '沙特'},
+        'IN': {'flag': '🇮🇳', 'name': '印度'},
+        'TH': {'flag': '🇹🇭', 'name': '泰国'},
+        'MY': {'flag': '🇲🇾', 'name': '马来西亚'},
+        'ID': {'flag': '🇮🇩', 'name': '印尼'},
+        'VN': {'flag': '🇻🇳', 'name': '越南'},
+        'PH': {'flag': '🇵🇭', 'name': '菲律宾'},
+        'BR': {'flag': '🇧🇷', 'name': '巴西'},
+        'MX': {'flag': '🇲🇽', 'name': '墨西哥'},
+        'AR': {'flag': '🇦🇷', 'name': '阿根廷'},
+        'CL': {'flag': '🇨🇱', 'name': '智利'},
+        'CO': {'flag': '🇨🇴', 'name': '哥伦比亚'},
+        'ZA': {'flag': '🇿🇦', 'name': '南非'},
+        'EG': {'flag': '🇪🇬', 'name': '埃及'},
+        'NG': {'flag': '🇳🇬', 'name': '尼日利亚'},
+        'KE': {'flag': '🇰🇪', 'name': '肯尼亚'},
+        'CN': {'flag': '⭐', 'name': '中·国'},      # 修改：中国使用⭐
+        'TW': {'flag': '🌶️', 'name': '台·湾'},     # 修改：台湾使用🌶️
+        'UN': {'flag': '🏴', 'name': '未知'}        # 未知国家
     },
     
     # IP类型标志
@@ -77,66 +118,49 @@ CONFIG = {
 ip_geo_cache = {}
 
 ####################################################
-# IP地理位置查询函数
+# IP地理位置查询函数 - 简化版本
 ####################################################
 
 def get_real_ip_country_code(ip):
     """
-    使用真实的地理位置API检测IP国家代码
+    使用ipapi.co API检测IP国家代码 - 稳定精准
     """
     # 检查缓存
     if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
         return ip_geo_cache[ip]
     
-    apis = [
-        {
-            'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
-            'field': 'countryCode',
-            'check_field': 'status',
-            'check_value': 'success'
-        },
-        {
-            'url': f'https://ipapi.co/{ip}/json/',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        },
-        {
-            'url': f'https://ip.useragentinfo.com/json?ip={ip}',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        },
-        {
-            'url': f'http://ipinfo.io/{ip}/json',
-            'field': 'country',
-            'check_field': 'country',
-            'check_value': None
-        }
-    ]
+    # 使用ipapi.co API - 稳定且精准
+    api_url = f"https://ipapi.co/{ip}/json/"
     
-    for api in apis:
-        try:
-            response = requests.get(api['url'], timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
-            if response.status_code == 200:
-                data = response.json()
-                
-                if api['check_value'] is not None:
-                    if data.get(api['check_field']) != api['check_value']:
-                        continue
-                else:
-                    if api['check_field'] not in data:
-                        continue
-                
-                country_code = data.get(api['field'])
+    try:
+        response = requests.get(api_url, timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
+        if response.status_code == 200:
+            data = response.json()
+            country_code = data.get('country_code')
+            
+            if country_code:
+                # 缓存结果
+                if CONFIG["IP_GEO_API"]["enable_cache"]:
+                    ip_geo_cache[ip] = country_code
+                return country_code
+    except Exception as e:
+        # 如果ipapi.co失败，尝试备用API
+        pass
+    
+    # 备用API：ip-api.com
+    try:
+        backup_url = f"http://ip-api.com/json/{ip}?fields=status,message,countryCode"
+        response = requests.get(backup_url, timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                country_code = data.get('countryCode')
                 if country_code:
-                    # 缓存结果
                     if CONFIG["IP_GEO_API"]["enable_cache"]:
                         ip_geo_cache[ip] = country_code
-                    
                     return country_code
-        except Exception:
-            continue
+    except Exception:
+        pass
     
     # 如果所有API都失败，返回未知
     return 'UN'
@@ -618,27 +642,32 @@ def enhance_ip_with_country_info(ip_list):
     return enhanced_ips
 
 ####################################################
-# 格式化输出函数 - 统一为 'ip:端口#来源标志国旗 国家简称' 格式
+# 格式化输出函数 - 修改：添加国家名称
 ####################################################
 
 def format_ip_output(ip_data, port=None):
     """
-    输出 ip:端口#来源标志国旗 国家简称 格式
+    输出 ip:端口#来源标志国旗 国家名称·国家简称 格式
     例如: 
-    104.16.132.229:443#👋🇺🇸 US  (Cloudflare官方IP)
-    192.168.1.1:443#👏🇨🇳 CN      (自定义IP)
+    104.16.132.229:443#👋🇺🇸 美国·US  (Cloudflare官方IP)
+    192.168.1.1:443#👏⭐ 中·国·CN      (自定义IP)
     """
     if port is None:
         port = CONFIG["PORT"]
     
     country_code = ip_data.get('countryCode', 'UN')
-    flag = CONFIG["COUNTRY_FLAGS"].get(country_code, '🏴')
+    
+    # 获取国家信息
+    country_info = CONFIG["COUNTRY_INFO"].get(country_code, CONFIG["COUNTRY_INFO"]['UN'])
+    flag = country_info['flag']
+    country_name = country_info['name']
     
     # 获取来源标志
     source = ip_data.get('source', 'CLOUDFLARE')
     source_flag = CONFIG["IP_TYPE_FLAGS"].get(source, '👋')
     
-    return f"{ip_data['ip']}:{port}#{source_flag}{flag} {country_code}"
+    # 格式：ip:端口#来源标志国旗 国家名称·国家简称
+    return f"{ip_data['ip']}:{port}#{source_flag}{flag} {country_name}·{country_code}"
 
 def format_ip_list_for_display(ip_list, port=None):
     """格式化IP列表用于显示（统一格式）"""
@@ -706,9 +735,9 @@ if __name__ == "__main__":
     print(f"{'Cloudflare IP优选工具':^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
-    print(f"输出格式: ip:端口#来源标志国旗 国家简称")
+    print(f"输出格式: ip:端口#来源标志国旗 国家名称·国家简称")
     print(f"来源标志: 👏=自定义 👋=Cloudflare官方")
-    print(f"地理位置API: 启用")
+    print(f"地理位置API: ipapi.co (精简稳定)")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -826,9 +855,11 @@ if __name__ == "__main__":
 
     # 保存详细数据（全部精选IP）
     with open('results/ip_details.csv', 'w', encoding='utf-8') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,来源,排名\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,国家名称,来源,排名\n")
         for i, ip_data in enumerate(sorted_ips, 1):
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['source']},{i}\n")
+            country_info = CONFIG["COUNTRY_INFO"].get(ip_data['countryCode'], CONFIG["COUNTRY_INFO"]['UN'])
+            country_name = country_info['name']
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{country_name},{ip_data['source']},{i}\n")
         print(f"💾 已保存 {len(sorted_ips)} 个IP的详细数据到 ip_details.csv")
 
     # 10. 按来源和国家分组统计
@@ -838,6 +869,8 @@ if __name__ == "__main__":
     for ip_data in enhanced_results:
         source = ip_data['source']
         country = ip_data['countryCode']
+        country_info = CONFIG["COUNTRY_INFO"].get(country, CONFIG["COUNTRY_INFO"]['UN'])
+        country_name = country_info['name']
         
         # 来源统计
         if source not in source_stats:
@@ -848,7 +881,7 @@ if __name__ == "__main__":
         
         # 国家统计
         if country not in country_stats:
-            country_stats[country] = {'count': 0, 'avg_rtt': 0, 'avg_speed': 0}
+            country_stats[country] = {'count': 0, 'name': country_name, 'avg_rtt': 0, 'avg_speed': 0}
         country_stats[country]['count'] += 1
         country_stats[country]['avg_rtt'] += ip_data['rtt']
         country_stats[country]['avg_speed'] += ip_data['speed']
@@ -878,8 +911,10 @@ if __name__ == "__main__":
 
     print(f"\n🌍 国家分布:")
     for country, stats in sorted(country_stats.items(), key=lambda x: x[1]['count'], reverse=True):
-        flag = CONFIG["COUNTRY_FLAGS"].get(country, '🏴')
-        print(f"  {flag} {country}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
+        country_info = CONFIG["COUNTRY_INFO"].get(country, CONFIG["COUNTRY_INFO"]['UN'])
+        flag = country_info['flag']
+        name = stats['name']
+        print(f"  {flag} {name}: {stats['count']}个IP, 平均延迟{stats['avg_rtt']:.1f}ms, 平均速度{stats['avg_speed']:.1f}Mbps")
 
     if best_ips:
         # 显示最佳IP（前20个或全部，取较小值）
