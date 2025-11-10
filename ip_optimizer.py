@@ -27,9 +27,9 @@ CONFIG = {
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~200",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 300,  # 并发线程数
+    "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 2000,  # 实际测试IP数量
+    "TEST_IP_COUNT": 2500,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
@@ -37,8 +37,6 @@ CONFIG = {
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
-    "GEO_TEST_URL": "https://ping0.co/",  # 地区测试URL
-    "GEO_TEST_TIMEOUT": 10,  # 地区测试超时时间(秒)
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -61,6 +59,13 @@ CONFIG = {
         'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
         'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
         'UN': '🏴'  # 未知国家
+    },
+    
+    # IP地理位置API配置
+    "IP_GEO_API": {
+        "timeout": 3,
+        "retry": 2,
+        "enable_cache": True
     }
 }
 
@@ -71,164 +76,17 @@ ip_geo_cache = {}
 custom_ip_sources = {}  # 记录每个IP的来源：'custom' 或 'cloudflare'
 
 ####################################################
-# IP地理位置查询函数 - 使用ping0.co直连测试
+# IP地理位置查询函数
 ####################################################
 
-def get_ip_region_from_ping0(ip):
+def get_real_ip_country_code(ip):
     """
-    通过ping0.co直连测试获取IP地区信息
+    使用真实的地理位置API检测IP国家代码
     """
     # 检查缓存
-    if ip in ip_geo_cache:
+    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
         return ip_geo_cache[ip]
     
-    geo_url = CONFIG["GEO_TEST_URL"]
-    timeout = CONFIG["GEO_TEST_TIMEOUT"]  # 使用10秒超时
-    
-    try:
-        # 解析URL获取主机名
-        parsed_url = urlparse(geo_url)
-        hostname = parsed_url.hostname
-        port = parsed_url.port or (443 if parsed_url.scheme == 'https' else 80)
-        path = parsed_url.path or '/'
-        
-        # 使用IP直连访问ping0.co
-        start_time = time.time()
-        
-        if parsed_url.scheme == 'https':
-            # HTTPS请求
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            
-            conn = http.client.HTTPSConnection(
-                ip, 
-                port=port, 
-                timeout=timeout,
-                context=context
-            )
-        else:
-            # HTTP请求
-            conn = http.client.HTTPConnection(
-                ip,
-                port=port,
-                timeout=timeout
-            )
-        
-        # 设置请求头
-        headers = {
-            'Host': hostname,
-            'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
-            'Accept': '*/*',
-            'Connection': 'close'
-        }
-        
-        conn.request("GET", path, headers=headers)
-        response = conn.getresponse()
-        
-        # 读取响应内容
-        response_data = response.read().decode('utf-8', errors='ignore')
-        
-        # 从响应头或内容中提取地区信息
-        country_code = extract_country_from_response(response, response_data)
-        
-        conn.close()
-        
-        # 缓存结果
-        ip_geo_cache[ip] = country_code
-        return country_code
-        
-    except socket.timeout:
-        print(f"⏰ 地区测试超时: {ip} (超过{timeout}秒)")
-        return 'UN'
-    except Exception as e:
-        # 如果ping0.co测试失败，回退到传统API
-        return get_ip_region_fallback(ip)
-
-def extract_country_from_response(response, response_data):
-    """
-    从响应中提取国家/地区信息
-    """
-    # 尝试从响应头中获取地区信息
-    server_header = response.getheader('Server', '').lower()
-    via_header = response.getheader('Via', '').lower()
-    x_country_header = response.getheader('X-Country', '').upper()
-    
-    # 如果有X-Country头，直接使用
-    if x_country_header in CONFIG["COUNTRY_FLAGS"]:
-        return x_country_header
-    
-    # 检查常见的地区标识
-    if 'china' in server_header or 'cn' in server_header:
-        return 'CN'
-    elif 'taiwan' in server_header or 'tw' in server_header:
-        return 'TW'
-    elif 'hongkong' in server_header or 'hk' in server_header:
-        return 'HK'
-    elif 'japan' in server_header or 'jp' in server_header:
-        return 'JP'
-    elif 'singapore' in server_header or 'sg' in server_header:
-        return 'SG'
-    elif 'usa' in server_header or 'us' in server_header:
-        return 'US'
-    elif 'germany' in server_header or 'de' in server_header:
-        return 'DE'
-    elif 'korea' in server_header or 'kr' in server_header:
-        return 'KR'
-    elif 'united kingdom' in server_header or 'uk' in server_header or 'gb' in server_header:
-        return 'GB'
-    elif 'france' in server_header or 'fr' in server_header:
-        return 'FR'
-    elif 'canada' in server_header or 'ca' in server_header:
-        return 'CA'
-    elif 'australia' in server_header or 'au' in server_header:
-        return 'AU'
-    
-    # 检查Via头中的地区信息
-    if 'china' in via_header or 'cn' in via_header:
-        return 'CN'
-    elif 'taiwan' in via_header or 'tw' in via_header:
-        return 'TW'
-    elif 'hongkong' in via_header or 'hk' in via_header:
-        return 'HK'
-    elif 'japan' in via_header or 'jp' in via_header:
-        return 'JP'
-    elif 'singapore' in via_header or 'sg' in via_header:
-        return 'SG'
-    
-    # 如果无法从头部获取，尝试分析响应内容
-    content_lower = response_data.lower()
-    if any(keyword in content_lower for keyword in ['china', 'beijing', 'shanghai', 'guangzhou', 'shenzhen']):
-        return 'CN'
-    elif any(keyword in content_lower for keyword in ['taiwan', 'taipei']):
-        return 'TW'
-    elif any(keyword in content_lower for keyword in ['hong kong', 'hongkong']):
-        return 'HK'
-    elif any(keyword in content_lower for keyword in ['japan', 'tokyo', 'osaka']):
-        return 'JP'
-    elif any(keyword in content_lower for keyword in ['singapore']):
-        return 'SG'
-    elif any(keyword in content_lower for keyword in ['usa', 'united states', 'new york', 'los angeles']):
-        return 'US'
-    elif any(keyword in content_lower for keyword in ['germany', 'frankfurt', 'berlin']):
-        return 'DE'
-    elif any(keyword in content_lower for keyword in ['korea', 'seoul']):
-        return 'KR'
-    elif any(keyword in content_lower for keyword in ['united kingdom', 'london']):
-        return 'GB'
-    elif any(keyword in content_lower for keyword in ['france', 'paris']):
-        return 'FR'
-    elif any(keyword in content_lower for keyword in ['canada', 'toronto', 'vancouver']):
-        return 'CA'
-    elif any(keyword in content_lower for keyword in ['australia', 'sydney', 'melbourne']):
-        return 'AU'
-    
-    return 'UN'
-
-def get_ip_region_fallback(ip):
-    """
-    备用方案：使用传统的地理位置API
-    """
     apis = [
         {
             'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
@@ -241,12 +99,24 @@ def get_ip_region_fallback(ip):
             'field': 'country_code',
             'check_field': 'country_code',
             'check_value': None
+        },
+        {
+            'url': f'https://ip.useragentinfo.com/json?ip={ip}',
+            'field': 'country_code',
+            'check_field': 'country_code',
+            'check_value': None
+        },
+        {
+            'url': f'http://ipinfo.io/{ip}/json',
+            'field': 'country',
+            'check_field': 'country',
+            'check_value': None
         }
     ]
     
     for api in apis:
         try:
-            response = requests.get(api['url'], timeout=5, verify=False)  # 备用API使用5秒超时
+            response = requests.get(api['url'], timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
             if response.status_code == 200:
                 data = response.json()
                 
@@ -260,19 +130,15 @@ def get_ip_region_fallback(ip):
                 country_code = data.get(api['field'])
                 if country_code:
                     # 缓存结果
-                    ip_geo_cache[ip] = country_code
+                    if CONFIG["IP_GEO_API"]["enable_cache"]:
+                        ip_geo_cache[ip] = country_code
+                    
                     return country_code
         except Exception:
             continue
     
     # 如果所有API都失败，返回未知
     return 'UN'
-
-def get_real_ip_country_code(ip):
-    """
-    主函数：获取IP的国家代码
-    """
-    return get_ip_region_from_ping0(ip)
 
 ####################################################
 # URL测试函数
@@ -717,8 +583,8 @@ def enhance_ip_with_country_info(ip_list):
     """
     enhanced_ips = []
     
-    print(f"🌍 正在通过ping0.co检测IP地区信息 (超时:{CONFIG['GEO_TEST_TIMEOUT']}秒)...")
-    with tqdm(total=len(ip_list), desc="IP地区检测", unit="IP") as pbar:
+    print("🌍 正在检测IP真实地理位置...")
+    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
         for ip_data in ip_list:
             ip = ip_data[0]
             rtt = ip_data[1]
@@ -800,7 +666,7 @@ if __name__ == "__main__":
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称✓ (✓表示自定义IP)")
     print(f"IP池来源: {CONFIG['IP_POOL_SOURCES']}")
-    print(f"地区检测: 使用ping0.co直连测试 (超时:{CONFIG['GEO_TEST_TIMEOUT']}秒)")
+    print(f"地理位置API: 启用")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -822,7 +688,6 @@ if __name__ == "__main__":
     else:
         print(f"Cloudflare IP源: {CONFIG['CLOUDFLARE_IPS_URL']}")
     print(f"测速URL: {CONFIG['SPEED_URL']}")
-    print(f"地区测试URL: {CONFIG['GEO_TEST_URL']}")
     print("="*60 + "\n")
 
     # 2. 生成IP池（根据配置的多种来源）
@@ -885,7 +750,7 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 5. 为IP添加真实地区信息和来源标记
+    # 5. 为IP添加真实国家代码信息和来源标记
     enhanced_results = enhance_ip_with_country_info(full_results)
 
     # 6. 按延迟升序排列
@@ -947,5 +812,5 @@ if __name__ == "__main__":
     print("📊 文件说明:")
     print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 国家简称✓)")
     print("   - top_ips_details.csv: 详细性能数据")
-    print(f"🌍 地区信息通过ping0.co直连测试获取 (超时:{CONFIG['GEO_TEST_TIMEOUT']}秒)")
+    print("🗑️  结果已按延迟升序排列")
     print("="*60)
