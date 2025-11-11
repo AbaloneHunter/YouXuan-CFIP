@@ -25,7 +25,7 @@ CONFIG = {
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
     "PORT": 8443,  # TCP测试端口
-    "RTT_RANGE": "0~40",  # 延迟范围(ms)
+    "RTT_RANGE": "0~60",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
@@ -38,7 +38,11 @@ CONFIG = {
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     "IP_POOL_SOURCES": "1,2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
     
-    # 新增配置：地理位置查询设置
+    # 新增配置：注释显示设置
+    "DOMAIN_COMMENT_SEPARATOR": "#",  # 域名和注释的分隔符
+    "COMMENT_DISPLAY_FORMAT": "[{comment}]",  # 注释的显示格式
+    
+    # 地理位置查询设置
     "GEO_QUERY_ENABLED": True,  # 是否启用地理位置查询
     "GEO_QUERY_MODE": "DELAY_FIRST",  # 查询模式：DELAY_FIRST=延迟优先, SPEED_FIRST=速度优先, BOTH=两者都查
     "GEO_QUERY_COUNT": 200,  # 查询前多少个IP的地理位置
@@ -49,22 +53,6 @@ CONFIG = {
         "http://cp.cloudflare.com/",
         "http://www.cloudflare.com/favicon.ico"
     ],
-    
-    # 国家代码到国旗的映射
-    "COUNTRY_FLAGS": {
-        'CN': '❤️', 'TW': '🌀',  # 中国和台湾
-        'US': '🇺🇸', 'SG': '🇸🇬', 'JP': '🇯🇵', 'HK': '🇭🇰', 'KR': '🇰🇷',
-        'DE': '🇩🇪', 'GB': '🇬🇧', 'FR': '🇫🇷', 'CA': '🇨🇦', 'AU': '🇦🇺',
-        'NL': '🇳🇱', 'SE': '🇸🇪', 'FI': '🇫🇮', 'NO': '🇳🇴', 'DK': '🇩🇰',
-        'CH': '🇨🇭', 'IT': '🇮🇹', 'ES': '🇪🇸', 'PT': '🇵🇹', 'BE': '🇧🇪',
-        'AT': '🇦🇹', 'IE': '🇮🇪', 'PL': '🇵🇱', 'CZ': '🇨🇿', 'HU': '🇭🇺',
-        'RO': '🇷🇴', 'BG': '🇧🇬', 'GR': '🇬🇷', 'TR': '🇹🇷', 'RU': '🇷🇺',
-        'UA': '🇺🇦', 'IL': '🇮🇱', 'AE': '🇦🇪', 'SA': '🇸🇦', 'IN': '🇮🇳',
-        'TH': '🇹🇭', 'MY': '🇲🇾', 'ID': '🇮🇩', 'VN': '🇻🇳', 'PH': '🇵🇭',
-        'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
-        'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
-        'UN': '🏴'  # 未知国家
-    },
     
     # IP地理位置API配置
     "IP_GEO_API": {
@@ -77,8 +65,8 @@ CONFIG = {
 # IP地理位置缓存
 ip_geo_cache = {}
 
-# 自定义IP标记跟踪
-custom_ip_sources = {}  # 记录每个IP的来源：'custom' 或 'cloudflare'
+# IP详细信息存储
+ip_details = {}  # 存储每个IP的详细信息：{ip: {"comment": "注释", "source": "来源", "domain": "原始域名"}}
 
 ####################################################
 # IP地理位置查询函数
@@ -397,18 +385,20 @@ def init_env():
 
 def parse_custom_ips_file():
     """
-    解析自定义IP文件，区分域名、单个IP和IP段
-    返回: (domains, individual_ips, ip_subnets)
+    解析自定义IP文件，支持域名/IP/IP段后跟#注释
+    返回: (domains_with_comments, individual_ips_with_comments, ip_subnets_with_comments)
     """
     custom_file = CONFIG["CUSTOM_IPS_FILE"]
-    domains = set()
-    individual_ips = set()
-    ip_subnets = set()
+    domains_with_comments = {}  # 域名->注释
+    individual_ips_with_comments = {}  # IP->注释
+    ip_subnets_with_comments = {}  # IP段->注释
     
     if not custom_file or not os.path.exists(custom_file):
-        return domains, individual_ips, ip_subnets
+        return domains_with_comments, individual_ips_with_comments, ip_subnets_with_comments
     
     print(f"🔧 读取自定义IP池文件: {custom_file}")
+    separator = CONFIG["DOMAIN_COMMENT_SEPARATOR"]
+    
     try:
         with open(custom_file, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
@@ -416,52 +406,66 @@ def parse_custom_ips_file():
                 if not line or line.startswith('#'):
                     continue
                 
+                # 解析注释
+                original_line = line
+                comment = ""
+                if separator in line:
+                    main_part, comment = line.split(separator, 1)
+                    main_part = main_part.strip()
+                    comment = comment.strip()
+                else:
+                    main_part = line
+                
                 # 检测是否为域名（包含字母）
-                if any(c.isalpha() for c in line):
-                    domains.add(line)
+                if any(c.isalpha() for c in main_part):
+                    domains_with_comments[main_part] = comment
                     continue
                 
                 # 尝试解析为IP地址
                 try:
-                    ip_obj = ipaddress.ip_address(line)
-                    individual_ips.add(line)
+                    ip_obj = ipaddress.ip_address(main_part)
+                    individual_ips_with_comments[main_part] = comment
                     continue
                 except ValueError:
                     pass
                 
                 # 尝试解析为IP段
                 try:
-                    network = ipaddress.ip_network(line, strict=False)
-                    ip_subnets.add(str(network))
+                    network = ipaddress.ip_network(main_part, strict=False)
+                    ip_subnets_with_comments[str(network)] = comment
                 except ValueError:
-                    print(f"⚠️ 第{line_num}行格式错误: {line}")
+                    print(f"⚠️ 第{line_num}行格式错误: {original_line}")
         
-        print(f"✅ 自定义IP池解析完成: {len(domains)}个域名, {len(individual_ips)}个独立IP, {len(ip_subnets)}个IP段")
+        print(f"✅ 自定义IP池解析完成: {len(domains_with_comments)}个域名, {len(individual_ips_with_comments)}个独立IP, {len(ip_subnets_with_comments)}个IP段")
         
     except Exception as e:
         print(f"🚨 读取自定义IP池失败: {e}")
     
-    return domains, individual_ips, ip_subnets
+    return domains_with_comments, individual_ips_with_comments, ip_subnets_with_comments
 
-def resolve_domains_to_ips(domains):
+def resolve_domains_to_ips(domains_with_comments):
     """
-    将域名解析为IP地址
+    将域名解析为IP地址，并保留注释信息
+    返回: {ip: {"comment": 注释, "source": "custom", "domain": 原始域名}}
     """
-    resolved_ips = set()
+    resolved_ips = {}
     
-    if not domains:
+    if not domains_with_comments:
         return resolved_ips
     
-    print(f"🔧 解析 {len(domains)} 个域名...")
-    with tqdm(total=len(domains), desc="域名解析", unit="域名") as pbar:
-        for domain in domains:
+    print(f"🔧 解析 {len(domains_with_comments)} 个域名...")
+    with tqdm(total=len(domains_with_comments), desc="域名解析", unit="域名") as pbar:
+        for domain, comment in domains_with_comments.items():
             try:
                 # 解析域名获取IP地址
                 ips = socket.getaddrinfo(domain, None, socket.AF_INET)
                 for ip_info in ips:
                     ip = ip_info[4][0]
-                    resolved_ips.add(ip)
-                    custom_ip_sources[ip] = 'custom'
+                    resolved_ips[ip] = {
+                        "comment": comment,
+                        "source": "custom",
+                        "domain": domain
+                    }
             except Exception as e:
                 print(f"⚠️ 域名解析失败 {domain}: {e}")
             finally:
@@ -500,44 +504,53 @@ def generate_random_ip(subnet):
 
 def generate_ip_pool():
     """
-    根据配置的IP池来源生成IP池
+    根据配置的IP池来源生成IP池，保留注释信息
     """
     sources_config = CONFIG["IP_POOL_SOURCES"]
     sources = [s.strip() for s in sources_config.split(',')]
     
     print(f"📊 IP池来源配置: {sources_config}")
     
-    total_ip_pool = set()
+    total_ip_pool = {}  # 存储IP的完整信息
     
     # 1. 自定义域名和IP
     if '1' in sources:
-        domains, individual_ips, _ = parse_custom_ips_file()
+        domains_with_comments, individual_ips_with_comments, _ = parse_custom_ips_file()
+        
         # 解析域名
-        resolved_ips = resolve_domains_to_ips(domains)
+        resolved_ips = resolve_domains_to_ips(domains_with_comments)
+        
         # 添加独立IP
-        for ip in individual_ips:
-            resolved_ips.add(ip)
-            custom_ip_sources[ip] = 'custom'
+        for ip, comment in individual_ips_with_comments.items():
+            resolved_ips[ip] = {
+                "comment": comment,
+                "source": "custom",
+                "domain": ip
+            }
         
         total_ip_pool.update(resolved_ips)
         print(f"✅ 来源1 - 自定义域名和IP: {len(resolved_ips)} 个IP")
     
     # 2. 自定义IP段
     if '2' in sources:
-        _, _, custom_subnets = parse_custom_ips_file()
-        custom_ip_count = CONFIG["IP_POOL_SIZE"] // 3  # 分配1/3给自定义IP段
+        _, _, custom_subnets_with_comments = parse_custom_ips_file()
+        custom_ip_count = CONFIG["IP_POOL_SIZE"] // 3
         
-        custom_ip_pool = set()
-        if custom_subnets:
-            print(f"🔧 从 {len(custom_subnets)} 个自定义IP段生成IP...")
-            with tqdm(total=min(custom_ip_count, len(custom_subnets) * 10), 
+        custom_ip_pool = {}
+        if custom_subnets_with_comments:
+            print(f"🔧 从 {len(custom_subnets_with_comments)} 个自定义IP段生成IP...")
+            with tqdm(total=min(custom_ip_count, len(custom_subnets_with_comments) * 10), 
                      desc="生成自定义IP段", unit="IP") as pbar:
-                while len(custom_ip_pool) < custom_ip_count and custom_subnets:
-                    subnet = random.choice(list(custom_subnets))
+                while len(custom_ip_pool) < custom_ip_count and custom_subnets_with_comments:
+                    subnet = random.choice(list(custom_subnets_with_comments.keys()))
+                    comment = custom_subnets_with_comments[subnet]
                     ip = generate_random_ip(subnet)
                     if ip not in custom_ip_pool:
-                        custom_ip_pool.add(ip)
-                        custom_ip_sources[ip] = 'custom'
+                        custom_ip_pool[ip] = {
+                            "comment": comment,
+                            "source": "custom",
+                            "domain": f"网段:{subnet}"
+                        }
                         pbar.update(1)
         
         total_ip_pool.update(custom_ip_pool)
@@ -549,23 +562,30 @@ def generate_ip_pool():
         if not cf_subnets:
             print("❌ 无法获取Cloudflare IP段")
         else:
-            cf_ip_count = CONFIG["IP_POOL_SIZE"] // 2  # 分配1/2给官方IP
+            cf_ip_count = CONFIG["IP_POOL_SIZE"] // 2
             
-            cf_ip_pool = set()
+            cf_ip_pool = {}
             print(f"🔧 从 {len(cf_subnets)} 个Cloudflare IP段生成IP...")
             with tqdm(total=cf_ip_count, desc="生成官方IP", unit="IP") as pbar:
                 while len(cf_ip_pool) < cf_ip_count:
                     subnet = random.choice(cf_subnets)
                     ip = generate_random_ip(subnet)
                     if ip not in cf_ip_pool and ip not in total_ip_pool:
-                        cf_ip_pool.add(ip)
-                        custom_ip_sources[ip] = 'cloudflare'
+                        cf_ip_pool[ip] = {
+                            "comment": "Cloudflare官方",
+                            "source": "cloudflare",
+                            "domain": f"CF网段:{subnet}"
+                        }
                         pbar.update(1)
             
             total_ip_pool.update(cf_ip_pool)
             print(f"✅ 来源3 - 官方IP池: {len(cf_ip_pool)} 个IP")
     
-    full_ip_pool = list(total_ip_pool)
+    # 更新全局IP详细信息
+    global ip_details
+    ip_details.update(total_ip_pool)
+    
+    full_ip_pool = list(total_ip_pool.keys())
     random.shuffle(full_ip_pool)
     
     print(f"✅ IP池生成完成: 总计 {len(full_ip_pool)} 个IP")
@@ -657,41 +677,48 @@ def enhance_selected_ips_with_country_info(ip_list, country_map):
         
         country_code = country_map.get(ip, 'UN')
         
+        # 获取IP的详细信息
+        ip_info = ip_details.get(ip, {})
+        
         enhanced_ip = {
             'ip': ip,
             'rtt': rtt,
             'loss': loss,
             'speed': speed,
             'countryCode': country_code,
-            'isp': "Cloudflare",
-            'source': custom_ip_sources.get(ip, 'cloudflare')
+            'comment': ip_info.get('comment', ''),
+            'source': ip_info.get('source', 'cloudflare'),
+            'domain': ip_info.get('domain', ip)
         }
         enhanced_ips.append(enhanced_ip)
     
     return enhanced_ips
 
 ####################################################
-# 格式化输出函数 - 添加自定义IP标志'✓'
+# 格式化输出函数 - 支持注释显示
 ####################################################
 
 def format_ip_output(ip_data, port=None):
     """
-    输出 ip:端口#国旗 国家简称 格式，自定义IP添加'✓'标志
+    输出 ip:端口[注释] 国家简称 格式
     """
     if port is None:
         port = CONFIG["PORT"]
     
     country_code = ip_data.get('countryCode', 'UN')
-    flag = CONFIG["COUNTRY_FLAGS"].get(country_code, '🏴')
+    comment = ip_data.get('comment', '')
     
-    # 添加自定义IP标志
-    custom_flag = '✓' if ip_data.get('source') == 'custom' else ''
+    # 格式化注释
+    if comment:
+        formatted_comment = CONFIG["COMMENT_DISPLAY_FORMAT"].format(comment=comment)
+    else:
+        formatted_comment = ""
     
-    return f"{ip_data['ip']}:{port}#{flag} {country_code}{custom_flag}"
+    return f"{ip_data['ip']}:{port}{formatted_comment} {country_code}"
 
 def format_ip_list_for_display(ip_list, port=None):
     """
-    格式化IP列表用于显示（统一格式）
+    格式化IP列表用于显示
     """
     if port is None:
         port = CONFIG["PORT"]
@@ -704,7 +731,7 @@ def format_ip_list_for_display(ip_list, port=None):
 
 def format_ip_list_for_file(ip_list, port=None):
     """
-    格式化IP列表用于文件保存（统一格式）
+    格式化IP列表用于文件保存
     """
     if port is None:
         port = CONFIG["PORT"]
@@ -727,7 +754,7 @@ if __name__ == "__main__":
     print(f"{'Cloudflare IP优选工具':^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
-    print(f"输出格式: ip:端口#国旗 国家简称✓ (✓表示自定义IP)")
+    print(f"输出格式: ip:端口[注释] 国家简称")
     print(f"IP池来源: {CONFIG['IP_POOL_SOURCES']}")
     print(f"地理位置查询: {'启用' if CONFIG['GEO_QUERY_ENABLED'] else '禁用'}")
     if CONFIG['GEO_QUERY_ENABLED']:
@@ -839,14 +866,16 @@ if __name__ == "__main__":
                 final_enhanced_results.append(next(e for e in enhanced_results if e['ip'] == ip))
             else:
                 # 没有查询地理位置的IP，使用默认信息
+                ip_info = ip_details.get(ip, {})
                 final_enhanced_results.append({
                     'ip': ip,
                     'rtt': ip_data[1],
                     'loss': ip_data[2],
                     'speed': ip_data[3] if len(ip_data) > 3 else 0,
                     'countryCode': 'UN',
-                    'isp': "Cloudflare",
-                    'source': custom_ip_sources.get(ip, 'cloudflare')
+                    'comment': ip_info.get('comment', ''),
+                    'source': ip_info.get('source', 'cloudflare'),
+                    'domain': ip_info.get('domain', ip)
                 })
         
         sorted_enhanced_results = final_enhanced_results
@@ -859,17 +888,19 @@ if __name__ == "__main__":
         
         sorted_enhanced_results = []
         for ip_data in sorted_ips:
+            ip_info = ip_details.get(ip_data[0], {})
             sorted_enhanced_results.append({
                 'ip': ip_data[0],
                 'rtt': ip_data[1],
                 'loss': ip_data[2],
                 'speed': ip_data[3] if len(ip_data) > 3 else 0,
                 'countryCode': 'UN',
-                'isp': "Cloudflare",
-                'source': custom_ip_sources.get(ip_data[0], 'cloudflare')
+                'comment': ip_info.get('comment', ''),
+                'source': ip_info.get('source', 'cloudflare'),
+                'domain': ip_info.get('domain', ip_data[0])
             })
 
-    # 6. 保存结果（统一格式）
+    # 6. 保存结果
     os.makedirs('results', exist_ok=True)
     
     with open('results/all_ips.txt', 'w') as f:
@@ -879,19 +910,19 @@ if __name__ == "__main__":
         f.write("\n".join([ip[0] for ip in passed_ips]))
     
     with open('results/full_results.csv', 'w') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,注释,来源,原始域名\n")
         for ip_data in sorted_enhanced_results:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')}\n")
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['comment']},{ip_data['source']},{ip_data['domain']}\n")
     
-    # 所有输出文件都使用统一格式（包含✓标志）
+    # 使用新格式保存（包含注释）
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
         formatted_lines = format_ip_list_for_file(sorted_enhanced_results)
         f.write("\n".join(formatted_lines))
     
     with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
-        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
+        f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,注释,来源,原始域名\n")
         for ip_data in sorted_enhanced_results:
-            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')}\n")
+            f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['comment']},{ip_data['source']},{ip_data['domain']}\n")
 
     # 7. 显示统计结果
     print("\n" + "="*60)
@@ -911,14 +942,14 @@ if __name__ == "__main__":
         # 显示有地理位置信息的IP
         geo_ips = [ip for ip in sorted_enhanced_results if ip['countryCode'] != 'UN']
         if geo_ips:
-            print(f"\n🏆【最佳IP TOP10】(按延迟升序排列，✓表示自定义IP)")
+            print(f"\n🏆【最佳IP TOP10】(按延迟升序排列)")
             formatted_top_ips = format_ip_list_for_display(geo_ips[:10])
             for i, formatted_ip in enumerate(formatted_top_ips, 1):
                 ip_data = geo_ips[i-1]
                 source_info = " [自定义]" if ip_data.get('source') == 'custom' else ""
                 print(f"{i:2d}. {formatted_ip} (延迟:{ip_data['rtt']:.1f}ms, 速度:{ip_data['speed']:.1f}Mbps{source_info})")
         
-        print(f"\n📋【全部精选IP】(按延迟升序排列，✓表示自定义IP)")
+        print(f"\n📋【全部精选IP】(按延迟升序排列)")
         formatted_all_ips = format_ip_list_for_display(sorted_enhanced_results)
         for i in range(0, len(formatted_all_ips), 2):
             line_ips = formatted_all_ips[i:i+2]
@@ -927,7 +958,7 @@ if __name__ == "__main__":
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
     print("📊 文件说明:")
-    print("   - top_ips.txt: 精选IP列表 (ip:端口#国旗 国家简称✓)")
+    print("   - top_ips.txt: 精选IP列表 (ip:端口[注释] 国家简称)")
     print("   - top_ips_details.csv: 详细性能数据")
-    print("🗑️  结果已按延迟升序排列")
+    print("✅ 结果已按延迟升序排列")
     print("="*60)
