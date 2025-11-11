@@ -24,8 +24,8 @@ CONFIG = {
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
-    "PORT": 8443,  # TCP测试端口
-    "RTT_RANGE": "0~60",  # 延迟范围(ms)
+    "PORT": 443,  # TCP测试端口
+    "RTT_RANGE": "0~40",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
@@ -695,12 +695,12 @@ def enhance_selected_ips_with_country_info(ip_list, country_map):
     return enhanced_ips
 
 ####################################################
-# 格式化输出函数 - 支持注释显示
+# 格式化输出函数 - 修改为 ip:端口#[注释] 国家简称 格式
 ####################################################
 
 def format_ip_output(ip_data, port=None):
     """
-    输出 ip:端口[注释] 国家简称 格式
+    输出 ip:端口#[注释] 国家简称 格式
     """
     if port is None:
         port = CONFIG["PORT"]
@@ -714,7 +714,7 @@ def format_ip_output(ip_data, port=None):
     else:
         formatted_comment = ""
     
-    return f"{ip_data['ip']}:{port}{formatted_comment} {country_code}"
+    return f"{ip_data['ip']}:{port}#{formatted_comment} {country_code}"
 
 def format_ip_list_for_display(ip_list, port=None):
     """
@@ -754,7 +754,7 @@ if __name__ == "__main__":
     print(f"{'Cloudflare IP优选工具':^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
-    print(f"输出格式: ip:端口[注释] 国家简称")
+    print(f"输出格式: ip:端口#[注释] 国家简称")
     print(f"IP池来源: {CONFIG['IP_POOL_SOURCES']}")
     print(f"地理位置查询: {'启用' if CONFIG['GEO_QUERY_ENABLED'] else '禁用'}")
     if CONFIG['GEO_QUERY_ENABLED']:
@@ -914,7 +914,7 @@ if __name__ == "__main__":
         for ip_data in sorted_enhanced_results:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['comment']},{ip_data['source']},{ip_data['domain']}\n")
     
-    # 使用新格式保存（包含注释）
+    # 使用新格式保存（ip:端口#[注释] 国家简称）
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
         formatted_lines = format_ip_list_for_file(sorted_enhanced_results)
         f.write("\n".join(formatted_lines))
@@ -958,7 +958,7 @@ if __name__ == "__main__":
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
     print("📊 文件说明:")
-    print("   - top_ips.txt: 精选IP列表 (ip:端口[注释] 国家简称)")
+    print("   - top_ips.txt: 精选IP列表 (ip:端口#[注释] 国家简称)")
     print("   - top_ips_details.csv: 详细性能数据")
-    print("✅ 结果已按延迟升序排列")
+    print("🗑️  结果已按延迟升序排列")
     print("="*60)
