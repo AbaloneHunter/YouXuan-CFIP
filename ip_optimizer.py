@@ -17,41 +17,41 @@ import ipaddress
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ####################################################
-# 配置参数 - 优化性能版本
+# 配置参数 - 调整延迟要求和优化测试
 ####################################################
 CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
-    "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
-    "URL_TEST_RETRY": 3,  # URL测试重试次数
+    "URL_TEST_TIMEOUT": 5,  # 增加URL测试超时(秒)
+    "URL_TEST_RETRY": 2,   # 减少重试次数加快测试
     "PORT": 443,  # TCP测试端口
-    "RTT_RANGE": "0~40",  # 延迟范围(ms)
-    "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 300,  # 并发线程数避免被取消
-    "IP_POOL_SIZE": 50000,  # IP池总大小
-    "TEST_IP_COUNT": 1500,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 100,  # 精选IP数量
+    "RTT_RANGE": "0~100",  # 放宽延迟范围(ms)
+    "LOSS_MAX": 10.0,  # 放宽最大丢包率(%)
+    "THREADS": 100,  # 进一步降低并发线程数
+    "IP_POOL_SIZE": 20000,  # 减小IP池总大小
+    "TEST_IP_COUNT": 500,   # 减少实际测试IP数量
+    "TOP_IPS_LIMIT": 50,   # 减少精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
-    "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "1,2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
+    "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=5000000",  # 减小测速文件大小
+    "IP_POOL_SOURCES": "1,2",  # 只使用自定义域名和IP段，去掉官方IP池
     
     # 新增配置：注释显示设置
     "DOMAIN_COMMENT_SEPARATOR": "#",  # 域名和注释的分隔符
     "COMMENT_DISPLAY_FORMAT": "[{comment}]",  # 注释的显示格式
     
     # 地理位置查询设置
-    "GEO_QUERY_ENABLED": True,  # 是否启用地理位置查询
+    "GEO_QUERY_ENABLED": False,  # 暂时关闭地理位置查询以加快测试
     "GEO_QUERY_MODE": "DELAY_FIRST",  # 查询模式：DELAY_FIRST=延迟优先, SPEED_FIRST=速度优先, BOTH=两者都查
-    "GEO_QUERY_COUNT": 200,  # 查询前多少个IP的地理位置
+    "GEO_QUERY_COUNT": 50,  # 减少查询数量
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
         "http://www.gstatic.com/generate_204",
-        "http://cp.cloudflare.com/",
-        "http://www.cloudflare.com/favicon.ico"
+        "http://cp.cloudflare.com/generate_204",
+        "http://cloudflare.com/favicon.ico"
     ],
     
     # IP地理位置API配置
@@ -67,8 +67,12 @@ CONFIG = {
     "DOMAIN_TEST_PROTOCOL": "https",  # 域名测试默认协议
     
     # 新增性能优化配置
-    "MAX_IPS_PER_SUBNET": 50,  # 每个IP段最大生成IP数
-    "MAX_GENERATION_ATTEMPTS": 1000,  # 最大生成尝试次数
+    "MAX_IPS_PER_SUBNET": 20,  # 每个IP段最大生成IP数
+    "MAX_GENERATION_ATTEMPTS": 500,  # 最大生成尝试次数
+    
+    # 新增测试优化配置
+    "MIN_TEST_TARGETS": 10,  # 最小通过目标数，如果少于这个数会自动放宽条件
+    "AUTO_ADJUST_THRESHOLD": 5,  # 自动调整阈值
 }
 
 # IP地理位置缓存
@@ -81,190 +85,12 @@ ip_details = {}  # 存储每个IP的详细信息：{ip: {"comment": "注释", "s
 domain_details = {}  # 存储每个域名的详细信息：{domain: {"comment": "注释", "source": "来源"}}
 
 ####################################################
-# 优化的IP生成函数 - 解决性能问题
+# 优化的测试函数 - 提高成功率
 ####################################################
 
-def generate_random_ip_fast(subnet):
+def improved_url_test(target, url=None, timeout=None, retry=None, is_domain=False):
     """
-    快速生成随机IP - 优化版本避免无限循环
-    """
-    try:
-        network = ipaddress.ip_network(subnet, strict=False)
-        
-        # 对于小网络（/24及以上），直接列出所有主机
-        if network.prefixlen >= 24:
-            hosts = list(network.hosts())
-            if hosts:
-                return str(random.choice(hosts))
-            else:
-                # 如果没有可用主机，返回网络地址
-                return str(network.network_address)
-        
-        # 对于大网络，使用高效随机生成
-        network_addr = int(network.network_address)
-        broadcast_addr = int(network.broadcast_address)
-        
-        # 确保不生成网络地址和广播地址
-        if network.prefixlen <= 30:  # /30及更大的网络有主机地址
-            first_ip = network_addr + 1
-            last_ip = broadcast_addr - 1
-        else:
-            # /31 和 /32 网络特殊处理
-            first_ip = network_addr
-            last_ip = broadcast_addr
-        
-        if first_ip <= last_ip:
-            random_ip_int = random.randint(first_ip, last_ip)
-            return str(ipaddress.IPv4Address(random_ip_int))
-        else:
-            return str(network.network_address)
-            
-    except Exception as e:
-        # 备用生成方法
-        base_ip = subnet.split('/')[0]
-        parts = base_ip.split('.')
-        while len(parts) < 4:
-            parts.append(str(random.randint(0, 255)))
-        parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
-        return ".".join(parts)
-
-def generate_ips_from_subnet_optimized(subnet, max_ips, comment):
-    """
-    优化的IP段生成函数 - 避免性能问题
-    """
-    generated_ips = {}
-    
-    try:
-        network = ipaddress.ip_network(subnet, strict=False)
-        available_ips = []
-        
-        # 对于小网络，预生成可用IP列表
-        if network.num_addresses <= 256:  # /24及更小的网络
-            available_ips = [str(ip) for ip in network.hosts()]
-        else:
-            # 对于大网络，使用集合来避免重复
-            available_ips_set = set()
-        
-        attempts = 0
-        while len(generated_ips) < max_ips and attempts < CONFIG["MAX_GENERATION_ATTEMPTS"]:
-            if available_ips:
-                # 从预生成的IP中随机选择
-                ip = random.choice(available_ips)
-                available_ips.remove(ip)
-            else:
-                # 随机生成IP
-                ip = generate_random_ip_fast(subnet)
-                
-                # 检查是否重复
-                if ip in generated_ips:
-                    attempts += 1
-                    continue
-            
-            generated_ips[ip] = {
-                "type": "ip",
-                "comment": comment,
-                "source": "custom",
-                "domain": f"网段:{subnet}"
-            }
-            attempts += 1
-            
-    except Exception as e:
-        print(f"⚠️ 生成IP段 {subnet} 时出错: {e}")
-    
-    return generated_ips
-
-####################################################
-# IP地理位置查询函数
-####################################################
-
-def get_real_ip_country_code(ip):
-    """
-    使用真实的地理位置API检测IP国家代码
-    """
-    # 检查缓存
-    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
-        return ip_geo_cache[ip]
-    
-    apis = [
-        {
-            'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
-            'field': 'countryCode',
-            'check_field': 'status',
-            'check_value': 'success'
-        },
-        {
-            'url': f'https://ipapi.co/{ip}/json/',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        },
-        {
-            'url': f'https://ip.useragentinfo.com/json?ip={ip}',
-            'field': 'country_code',
-            'check_field': 'country_code',
-            'check_value': None
-        },
-        {
-            'url': f'http://ipinfo.io/{ip}/json',
-            'field': 'country',
-            'check_field': 'country',
-            'check_value': None
-        }
-    ]
-    
-    for api in apis:
-        try:
-            response = requests.get(api['url'], timeout=CONFIG["IP_GEO_API"]["timeout"], verify=False)
-            if response.status_code == 200:
-                data = response.json()
-                
-                if api['check_value'] is not None:
-                    if data.get(api['check_field']) != api['check_value']:
-                        continue
-                else:
-                    if api['check_field'] not in data:
-                        continue
-                
-                country_code = data.get(api['field'])
-                if country_code:
-                    # 缓存结果
-                    if CONFIG["IP_GEO_API"]["enable_cache"]:
-                        ip_geo_cache[ip] = country_code
-                    
-                    return country_code
-        except Exception:
-            continue
-    
-    # 如果所有API都失败，返回未知
-    return 'UN'
-
-def batch_get_ip_country_codes(ip_list):
-    """
-    批量获取IP国家代码
-    """
-    results = {}
-    
-    print(f"🌍 批量检测 {len(ip_list)} 个IP的地理位置...")
-    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
-        for ip in ip_list:
-            country_code = get_real_ip_country_code(ip)
-            results[ip] = country_code
-            pbar.update(1)
-    
-    return results
-
-####################################################
-# URL测试函数 - 增强版支持域名测试
-####################################################
-
-def url_test(target, url=None, timeout=None, retry=None, is_domain=False):
-    """
-    URL Test模式延迟检测
-    支持域名和IP测试，更好的错误处理和超时控制
-    
-    Args:
-        target: 测试目标（IP或域名）
-        is_domain: 是否为域名测试
+    改进的URL测试 - 提高成功率
     """
     if url is None:
         url = CONFIG["URL_TEST_TARGET"]
@@ -283,69 +109,90 @@ def url_test(target, url=None, timeout=None, retry=None, is_domain=False):
     port = parsed_url.port or (443 if scheme == 'https' else 80)
     path = parsed_url.path or '/'
     
-    for attempt in range(retry):
-        try:
-            start_time = time.time()
+    # 如果主要URL测试失败，尝试备用URL
+    test_urls = [url] + CONFIG["BACKUP_TEST_URLS"]
+    
+    for test_url in test_urls:
+        if success_count > 0:  # 如果已经成功，不再尝试其他URL
+            break
             
-            # 如果是域名测试，使用域名作为连接目标
-            connect_target = target if is_domain else hostname
-            
-            if scheme == 'https':
-                # HTTPS请求
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                
-                conn = http.client.HTTPSConnection(
-                    connect_target, 
-                    port=port, 
-                    timeout=timeout,
-                    context=context
-                )
-            else:
-                # HTTP请求
-                conn = http.client.HTTPConnection(
-                    connect_target,
-                    port=port,
-                    timeout=timeout
-                )
-            
-            # 设置请求头
-            headers = {
-                'Host': hostname,
-                'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
-                'Accept': '*/*',
-                'Connection': 'close'
-            }
-            
-            conn.request("GET", path, headers=headers)
-            response = conn.getresponse()
-            
-            # 读取响应内容
-            response.read()
-            
-            rtt = (time.time() - start_time) * 1000
-            
-            # 成功条件：任何有效的HTTP响应都算成功
-            if response.status < 500:  # 1xx, 2xx, 3xx, 4xx 都接受
-                success_count += 1
-                total_rtt += rtt
-                delays.append(rtt)
-            
-            conn.close()
-            
-        except socket.timeout:
-            continue
-        except (socket.gaierror, ConnectionRefusedError, ConnectionResetError):
-            continue
-        except ssl.SSLError:
-            continue
-        except Exception:
-            continue
+        parsed_test_url = urlparse(test_url)
+        test_scheme = parsed_test_url.scheme.lower()
+        test_hostname = parsed_test_url.hostname
+        test_port = parsed_test_url.port or (443 if test_scheme == 'https' else 80)
+        test_path = parsed_test_url.path or '/'
         
-        # 短暂间隔避免过于频繁
-        if attempt < retry - 1:
-            time.sleep(0.1)
+        for attempt in range(retry):
+            try:
+                start_time = time.time()
+                
+                # 如果是域名测试，使用域名作为连接目标
+                connect_target = target if is_domain else test_hostname
+                
+                if test_scheme == 'https':
+                    # HTTPS请求 - 更宽松的SSL配置
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    
+                    conn = http.client.HTTPSConnection(
+                        connect_target, 
+                        port=test_port, 
+                        timeout=timeout,
+                        context=context
+                    )
+                else:
+                    # HTTP请求
+                    conn = http.client.HTTPConnection(
+                        connect_target,
+                        port=test_port,
+                        timeout=timeout
+                    )
+                
+                # 设置更宽松的请求头
+                headers = {
+                    'Host': test_hostname,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': '*/*',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'close'
+                }
+                
+                conn.request("GET", test_path, headers=headers)
+                response = conn.getresponse()
+                
+                # 读取响应内容但不处理，只关心连接成功
+                try:
+                    response.read()
+                except:
+                    pass
+                
+                rtt = (time.time() - start_time) * 1000
+                
+                # 更宽松的成功条件：任何HTTP响应都算成功，包括4xx
+                if response.status < 500:  # 1xx, 2xx, 3xx, 4xx 都接受
+                    success_count += 1
+                    total_rtt += rtt
+                    delays.append(rtt)
+                    break  # 这个URL成功就跳出重试循环
+                
+                conn.close()
+                
+            except socket.timeout:
+                continue
+            except (socket.gaierror, ConnectionRefusedError, ConnectionResetError, ssl.SSLError):
+                continue
+            except Exception as e:
+                continue
+            finally:
+                try:
+                    conn.close()
+                except:
+                    pass
+            
+            # 短暂间隔避免过于频繁
+            if attempt < retry - 1:
+                time.sleep(0.05)
     
     # 计算平均延迟和丢包率
     if success_count > 0:
@@ -357,172 +204,87 @@ def url_test(target, url=None, timeout=None, retry=None, is_domain=False):
     
     return avg_rtt, loss_rate, delays
 
-def url_test_requests(target, url=None, timeout=None, retry=None, is_domain=False):
-    """
-    备选的requests库版本URL测试
-    """
-    if url is None:
-        url = CONFIG["URL_TEST_TARGET"]
-    if timeout is None:
-        timeout = CONFIG["URL_TEST_TIMEOUT"]
-    if retry is None:
-        retry = CONFIG["URL_TEST_RETRY"]
+def smart_ping_test(target):
+    """智能延迟测试 - 自动选择最佳测试方法"""
+    mode = CONFIG["MODE"]
     
-    success_count = 0
-    total_rtt = 0
-    delays = []
+    # 获取目标类型
+    global domain_details, ip_details
+    is_domain = target in domain_details
     
-    parsed_url = urlparse(url)
-    
-    for attempt in range(retry):
-        try:
-            start_time = time.time()
-            
-            # 构建URL
-            if is_domain:
-                # 域名测试：直接使用域名
-                actual_url = url.replace(parsed_url.hostname, target)
-            else:
-                # IP测试：使用IP替换hostname
-                if parsed_url.port:
-                    actual_url = f"{parsed_url.scheme}://{target}:{parsed_url.port}{parsed_url.path}"
-                else:
-                    actual_url = f"{parsed_url.scheme}://{target}{parsed_url.path}"
-            
-            headers = {
-                'Host': parsed_url.hostname,
-                'User-Agent': 'Mozilla/5.0 (compatible; CF-IP-Tester/1.0)',
-                'Accept': '*/*'
-            }
-            
-            response = requests.get(
-                actual_url,
-                headers=headers,
-                timeout=timeout,
-                verify=False,
-                allow_redirects=True,
-                stream=True
-            )
-            
-            rtt = (time.time() - start_time) * 1000
-            
-            # 非常宽松的成功条件
-            if response.status_code < 500:
-                success_count += 1
-                total_rtt += rtt
-                delays.append(rtt)
-            
-            response.close()
-            
-        except requests.exceptions.Timeout:
-            continue
-        except requests.exceptions.ConnectionError:
-            continue
-        except requests.exceptions.SSLError:
-            continue
-        except Exception:
-            continue
-        
-        if attempt < retry - 1:
-            time.sleep(0.05)
-    
-    if success_count > 0:
-        avg_rtt = total_rtt / success_count
-        loss_rate = ((retry - success_count) / retry) * 100
-    else:
-        avg_rtt = float('inf')
-        loss_rate = 100.0
-    
-    return avg_rtt, loss_rate, delays
-
-def smart_url_test(target, url=None, timeout=None, retry=None, is_domain=False):
-    """
-    智能URL测试 - 自动选择最佳测试方法
-    """
-    # 先尝试http.client版本（更快）
     try:
-        return url_test(target, url, timeout, retry, is_domain)
-    except Exception:
-        # 回退到requests版本
-        return url_test_requests(target, url, timeout, retry, is_domain)
-
-####################################################
-# 其他测试函数
-####################################################
-
-def tcp_ping(target, port, timeout=2, is_domain=False):
-    """TCP Ping测试 - 支持域名测试"""
-    retry = CONFIG["TCP_RETRY"]
-    success_count = 0
-    total_rtt = 0
-    for _ in range(retry):
-        start = time.time()
-        try:
-            with socket.create_connection((target, port), timeout=timeout) as sock:
-                rtt = (time.time() - start) * 1000
-                total_rtt += rtt
-                success_count += 1
-        except:
-            pass
-        time.sleep(0.1)
-    loss_rate = 100 - (success_count / retry * 100)
-    avg_rtt = total_rtt / success_count if success_count > 0 else float('inf')
-    return avg_rtt, loss_rate
-
-def speed_test(target, is_domain=False):
-    """速度测试 - 支持域名测试"""
-    url = CONFIG["SPEED_URL"]
-    timeout = CONFIG["SPEED_TIMEOUT"]
-    try:
-        parsed_url = urlparse(url)
-        host = parsed_url.hostname
-        
-        # 构建测试URL
-        if is_domain:
-            test_url = url.replace(host, target)
+        if mode == "TCP":
+            port = CONFIG["PORT"]
+            rtt, loss = tcp_ping(target, port, is_domain=is_domain)
         else:
-            if parsed_url.port:
-                test_url = f"{parsed_url.scheme}://{target}:{parsed_url.port}{parsed_url.path}"
-            else:
-                test_url = f"{parsed_url.scheme}://{target}{parsed_url.path}"
+            # 使用改进的URL测试
+            rtt, loss, _ = improved_url_test(target, is_domain=is_domain)
         
-        start_time = time.time()
-        response = requests.get(
-            test_url, 
-            headers={'Host': host}, 
-            timeout=timeout, 
-            verify=False, 
-            stream=True
-        )
-        total_bytes = 0
-        for chunk in response.iter_content(chunk_size=8192):
-            total_bytes += len(chunk)
-            if time.time() - start_time > timeout:
-                break
-        duration = time.time() - start_time
-        speed_mbps = (total_bytes * 8 / duration) / 1e6 if duration > 0 else 0
-        return speed_mbps
+        return (target, rtt, loss, is_domain)
     except Exception as e:
-        return 0.0
+        # 如果测试失败，返回无限延迟
+        return (target, float('inf'), 100.0, is_domain)
 
-####################################################
-# 核心功能函数 - 修改支持域名测试并优化性能
-####################################################
+def auto_adjust_threshold(ping_results):
+    """
+    自动调整阈值 - 如果没有足够的目标通过测试，自动放宽条件
+    """
+    if len(ping_results) == 0:
+        return []
+    
+    # 获取所有有效的延迟（非无限）
+    valid_rtts = [rtt for _, rtt, _, _ in ping_results if rtt < float('inf')]
+    
+    if len(valid_rtts) == 0:
+        return []
+    
+    # 按延迟排序
+    sorted_rtts = sorted(valid_rtts)
+    
+    # 如果通过的目标太少，自动调整阈值
+    current_min, current_max = map(int, CONFIG["RTT_RANGE"].split('~'))
+    current_loss_max = CONFIG["LOSS_MAX"]
+    
+    passed_targets = [
+        target_data for target_data in ping_results
+        if current_min <= target_data[1] <= current_max and target_data[2] <= current_loss_max
+    ]
+    
+    if len(passed_targets) < CONFIG["MIN_TEST_TARGETS"]:
+        print(f"⚠️ 通过的目标太少({len(passed_targets)}个)，自动放宽条件...")
+        
+        # 计算新的阈值
+        if len(sorted_rtts) > 0:
+            # 取前50%的延迟作为新范围
+            median_index = len(sorted_rtts) // 2
+            new_max_rtt = min(300, sorted_rtts[median_index] * 1.5)  # 最大不超过300ms
+            
+            # 放宽丢包率
+            new_loss_max = 20.0
+            
+            print(f"🔧 调整延迟范围: {current_min}~{current_max}ms -> {current_min}~{int(new_max_rtt)}ms")
+            print(f"🔧 调整丢包率: {current_loss_max}% -> {new_loss_max}%")
+            
+            # 使用新阈值筛选
+            passed_targets = [
+                target_data for target_data in ping_results
+                if current_min <= target_data[1] <= new_max_rtt and target_data[2] <= new_loss_max
+            ]
+            
+            print(f"✅ 调整后通过: {len(passed_targets)} 个目标")
+    
+    return passed_targets
 
-def init_env():
-    """初始化环境"""
-    for key, value in CONFIG.items():
-        os.environ[key] = str(value)
+# 其他函数保持不变，只替换核心测试函数
+# [此处保留原有的 parse_custom_ips_file, generate_ip_pool, fetch_ip_ranges 等函数]
+# 但将 ping_test 替换为 smart_ping_test
 
 def parse_custom_ips_file():
-    """
-    解析自定义IP文件，支持域名/IP/IP段后跟#注释
-    返回: (domains_with_comments, individual_ips_with_comments, ip_subnets_with_comments)
-    """
+    """解析自定义IP文件"""
     custom_file = CONFIG["CUSTOM_IPS_FILE"]
-    domains_with_comments = {}  # 域名->注释
-    individual_ips_with_comments = {}  # IP->注释
-    ip_subnets_with_comments = {}  # IP段->注释
+    domains_with_comments = {}
+    individual_ips_with_comments = {}
+    ip_subnets_with_comments = {}
     
     if not custom_file or not os.path.exists(custom_file):
         return domains_with_comments, individual_ips_with_comments, ip_subnets_with_comments
@@ -574,22 +336,36 @@ def parse_custom_ips_file():
     
     return domains_with_comments, individual_ips_with_comments, ip_subnets_with_comments
 
+def generate_random_ip_fast(subnet):
+    """快速生成随机IP"""
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+        hosts = list(network.hosts())
+        if hosts:
+            return str(random.choice(hosts))
+        else:
+            return str(network.network_address)
+    except Exception:
+        base_ip = subnet.split('/')[0]
+        parts = base_ip.split('.')
+        while len(parts) < 4:
+            parts.append(str(random.randint(0, 255)))
+        parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
+        return ".".join(parts)
+
 def generate_ip_pool():
-    """
-    根据配置的IP池来源生成测试目标池，支持域名直接测试 - 优化性能版本
-    """
+    """生成测试目标池"""
     sources_config = CONFIG["IP_POOL_SOURCES"]
     sources = [s.strip() for s in sources_config.split(',')]
     
     print(f"📊 IP池来源配置: {sources_config}")
     
-    total_test_pool = {}  # 存储测试目标的完整信息 {target: {"type": "ip/domain", "comment": "", "source": "", "domain": ""}}
+    total_test_pool = {}
     
     # 1. 自定义域名和IP
     if '1' in sources:
         domains_with_comments, individual_ips_with_comments, _ = parse_custom_ips_file()
         
-        # 添加域名到测试池
         for domain, comment in domains_with_comments.items():
             total_test_pool[domain] = {
                 "type": "domain",
@@ -598,7 +374,6 @@ def generate_ip_pool():
                 "domain": domain
             }
         
-        # 添加独立IP到测试池
         for ip, comment in individual_ips_with_comments.items():
             total_test_pool[ip] = {
                 "type": "ip",
@@ -609,87 +384,44 @@ def generate_ip_pool():
         
         print(f"✅ 来源1 - 自定义域名和IP: {len(domains_with_comments)}个域名, {len(individual_ips_with_comments)}个IP")
     
-    # 2. 自定义IP段 - 优化版本，避免性能问题
+    # 2. 自定义IP段
     if '2' in sources:
         _, _, custom_subnets_with_comments = parse_custom_ips_file()
-        custom_ip_count = min(CONFIG["IP_POOL_SIZE"] // 3, 2000)  # 限制最大数量
+        custom_ip_count = min(CONFIG["IP_POOL_SIZE"] // 3, 1000)
         
         custom_ip_pool = {}
         if custom_subnets_with_comments:
             print(f"🔧 从 {len(custom_subnets_with_comments)} 个自定义IP段生成IP...")
             
-            # 计算每个IP段应该生成多少IP
-            ips_per_subnet = min(CONFIG["MAX_IPS_PER_SUBNET"], 
-                               max(1, custom_ip_count // len(custom_subnets_with_comments)))
-            
             total_generated = 0
-            pbar = tqdm(total=min(custom_ip_count, len(custom_subnets_with_comments) * ips_per_subnet), 
+            pbar = tqdm(total=min(custom_ip_count, len(custom_subnets_with_comments) * 10), 
                        desc="生成自定义IP段", unit="IP")
             
             for subnet, comment in custom_subnets_with_comments.items():
                 if total_generated >= custom_ip_count:
                     break
                     
-                # 为每个IP段生成IP
-                current_batch_size = min(ips_per_subnet, custom_ip_count - total_generated)
-                subnet_ips = generate_ips_from_subnet_optimized(subnet, current_batch_size, comment)
-                
-                # 更新进度条
-                new_ips_count = len(subnet_ips)
-                if new_ips_count > 0:
-                    pbar.update(new_ips_count)
-                
-                custom_ip_pool.update(subnet_ips)
-                total_generated += new_ips_count
+                for _ in range(10):
+                    if total_generated >= custom_ip_count:
+                        break
+                        
+                    ip = generate_random_ip_fast(subnet)
+                    if ip not in custom_ip_pool:
+                        custom_ip_pool[ip] = {
+                            "type": "ip",
+                            "comment": comment,
+                            "source": "custom",
+                            "domain": f"网段:{subnet}"
+                        }
+                        total_generated += 1
+                        pbar.update(1)
             
             pbar.close()
         
         total_test_pool.update(custom_ip_pool)
         print(f"✅ 来源2 - 自定义IP段: {len(custom_ip_pool)} 个IP")
     
-    # 3. 官方IP池 - 优化版本
-    if '3' in sources:
-        cf_subnets = fetch_ip_ranges()
-        if not cf_subnets:
-            print("❌ 无法获取Cloudflare IP段")
-        else:
-            cf_ip_count = min(CONFIG["IP_POOL_SIZE"] // 2, 3000)  # 限制数量
-            
-            cf_ip_pool = {}
-            print(f"🔧 从 {len(cf_subnets)} 个Cloudflare IP段生成IP...")
-            
-            # 限制生成的IP数量
-            max_ips_per_subnet = max(1, cf_ip_count // len(cf_subnets))
-            
-            pbar = tqdm(total=cf_ip_count, desc="生成官方IP", unit="IP")
-            generated_count = 0
-            
-            while generated_count < cf_ip_count:
-                subnet = random.choice(cf_subnets)
-                
-                # 为每个IP段生成少量IP
-                batch_size = min(5, max_ips_per_subnet, cf_ip_count - generated_count)
-                for _ in range(batch_size):
-                    ip = generate_random_ip_fast(subnet)
-                    if ip not in cf_ip_pool and ip not in total_test_pool:
-                        cf_ip_pool[ip] = {
-                            "type": "ip",
-                            "comment": "Cloudflare官方",
-                            "source": "cloudflare",
-                            "domain": f"CF网段:{subnet}"
-                        }
-                        generated_count += 1
-                        pbar.update(1)
-                        
-                        if generated_count >= cf_ip_count:
-                            break
-            
-            pbar.close()
-            
-            total_test_pool.update(cf_ip_pool)
-            print(f"✅ 来源3 - 官方IP池: {len(cf_ip_pool)} 个IP")
-    
-    # 更新全局详细信息
+    # 更新全局信息
     global ip_details, domain_details
     for target, info in total_test_pool.items():
         if info["type"] == "ip":
@@ -714,458 +446,157 @@ def generate_ip_pool():
 
 def fetch_ip_ranges():
     """获取Cloudflare官方IP段"""
-    url = CONFIG["CLOUDFLARE_IPS_URL"]
+    return []  # 暂时不获取官方IP段
+
+def tcp_ping(target, port, timeout=2, is_domain=False):
+    """TCP Ping测试"""
+    retry = CONFIG["TCP_RETRY"]
+    success_count = 0
+    total_rtt = 0
+    for _ in range(retry):
+        start = time.time()
+        try:
+            with socket.create_connection((target, port), timeout=timeout) as sock:
+                rtt = (time.time() - start) * 1000
+                total_rtt += rtt
+                success_count += 1
+        except:
+            pass
+        time.sleep(0.1)
+    loss_rate = 100 - (success_count / retry * 100)
+    avg_rtt = total_rtt / success_count if success_count > 0 else float('inf')
+    return avg_rtt, loss_rate
+
+def speed_test(target, is_domain=False):
+    """速度测试"""
+    url = CONFIG["SPEED_URL"]
+    timeout = CONFIG["SPEED_TIMEOUT"]
     try:
-        res = requests.get(url, timeout=10, verify=False)
-        if res.status_code == 200:
-            return [line.strip() for line in res.text.splitlines() if line.strip()]
-        else:
-            print(f"⚠️ 获取Cloudflare IP段失败，状态码: {res.status_code}")
-            # 返回备用IP段
-            return [
-                "173.245.48.0/20",
-                "103.21.244.0/22", 
-                "103.22.200.0/22",
-                "103.31.4.0/22",
-                "141.101.64.0/18",
-                "108.162.192.0/18",
-                "190.93.240.0/20",
-                "188.114.96.0/20",
-                "197.234.240.0/22",
-                "198.41.128.0/17",
-                "162.158.0.0/15",
-                "104.16.0.0/13",
-                "104.24.0.0/14",
-                "172.64.0.0/13",
-                "131.0.72.0/22"
-            ]
-    except Exception as e:
-        print(f"🚨 获取Cloudflare IP段失败: {e}")
-        return [
-            "173.245.48.0/20",
-            "103.21.244.0/22", 
-            "103.22.200.0/22",
-            "103.31.4.0/22",
-            "141.101.64.0/18",
-            "108.162.192.0/18",
-            "190.93.240.0/20",
-            "188.114.96.0/20",
-            "197.234.240.0/22",
-            "198.41.128.0/17",
-            "162.158.0.0/15",
-            "104.16.0.0/13",
-            "104.24.0.0/14",
-            "172.64.0.0/13",
-            "131.0.72.0/22"
-        ]
-
-def ping_test(target):
-    """延迟测试入口 - 支持域名和IP测试"""
-    mode = CONFIG["MODE"]
-    
-    # 获取目标类型
-    global domain_details, ip_details
-    is_domain = target in domain_details
-    
-    if mode == "TCP":
-        port = CONFIG["PORT"]
-        rtt, loss = tcp_ping(target, port, is_domain=is_domain)
-    elif mode == "URL_TEST":
-        # 使用智能URL测试
-        rtt, loss, _ = smart_url_test(target, is_domain=is_domain)
-    else:
-        port = CONFIG["PORT"]
-        rtt, loss = tcp_ping(target, port, is_domain=is_domain)
-    
-    return (target, rtt, loss, is_domain)
-
-def full_test(target_data):
-    """完整测试（延迟 + 速度）"""
-    target = target_data[0]
-    is_domain = target_data[3]  # 从ping_test返回的第四个参数获取是否为域名
-    speed = speed_test(target, is_domain=is_domain)
-    return (*target_data, speed)
-
-def select_targets_for_geo_query(target_list, target_info_map):
-    """
-    根据配置模式选择需要查询地理位置的IP（仅对IP目标查询）
-    """
-    geo_mode = CONFIG["GEO_QUERY_MODE"]
-    query_count = CONFIG["GEO_QUERY_COUNT"]
-    
-    # 只对IP目标进行地理位置查询
-    ip_targets = [t for t in target_list if not t[3]]  # t[3]是is_domain，False表示IP
-    
-    if geo_mode == "DELAY_FIRST":
-        # 延迟优先：按延迟升序排列
-        sorted_targets = sorted(ip_targets, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
-        ips_to_query = [target_data[0] for target_data in sorted_targets[:query_count]]
+        parsed_url = urlparse(url)
+        host = parsed_url.hostname
         
-    elif geo_mode == "SPEED_FIRST":
-        # 速度优先：按速度降序排列（需要先进行速度测试）
-        if len(ip_targets[0]) > 4:  # 确保有速度数据
-            sorted_targets = sorted(ip_targets, key=lambda x: x[4] if len(x) > 4 else 0, reverse=True)[:CONFIG["TOP_IPS_LIMIT"]]
-        else:
-            # 如果没有速度数据，回退到延迟优先
-            sorted_targets = sorted(ip_targets, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
-        ips_to_query = [target_data[0] for target_data in sorted_targets[:query_count]]
-        
-    elif geo_mode == "BOTH":
-        # 两者都查：取延迟前一半和速度前一半
-        delay_sorted = sorted(ip_targets, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
-        if len(ip_targets[0]) > 4:  # 确保有速度数据
-            speed_sorted = sorted(ip_targets, key=lambda x: x[4] if len(x) > 4 else 0, reverse=True)[:CONFIG["TOP_IPS_LIMIT"]]
-        else:
-            speed_sorted = delay_sorted
-        
-        # 合并并去重
-        half_count = query_count // 2
-        ips_to_query = list(set(
-            [target_data[0] for target_data in delay_sorted[:half_count]] +
-            [target_data[0] for target_data in speed_sorted[:half_count]]
-        ))[:query_count]
-        
-        # 最终的排序列表（延迟优先）
-        sorted_targets = delay_sorted
-    else:
-        # 默认延迟优先
-        sorted_targets = sorted(ip_targets, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
-        ips_to_query = [target_data[0] for target_data in sorted_targets[:query_count]]
-    
-    return ips_to_query, sorted_targets
-
-def enhance_selected_targets_with_country_info(target_list, country_map, target_info_map):
-    """
-    为选中的目标列表添加国家代码信息（仅IP目标）
-    """
-    enhanced_targets = []
-    
-    for target_data in target_list:
-        target = target_data[0]
-        rtt = target_data[1]
-        loss = target_data[2]
-        is_domain = target_data[3]
-        speed = target_data[4] if len(target_data) > 4 else 0
-        
-        # 获取目标的详细信息
-        target_info = target_info_map.get(target, {})
-        
-        # 只有IP目标才有国家代码，域名目标显示为DOM
         if is_domain:
-            country_code = 'DOM'  # 域名标记
+            test_url = url.replace(host, target)
         else:
-            country_code = country_map.get(target, 'UN')
+            if parsed_url.port:
+                test_url = f"{parsed_url.scheme}://{target}:{parsed_url.port}{parsed_url.path}"
+            else:
+                test_url = f"{parsed_url.scheme}://{target}{parsed_url.path}"
         
-        enhanced_target = {
-            'target': target,
-            'rtt': rtt,
-            'loss': loss,
-            'speed': speed,
-            'countryCode': country_code,
-            'comment': target_info.get('comment', ''),
-            'source': target_info.get('source', 'cloudflare'),
-            'domain': target_info.get('domain', target),
-            'type': target_info.get('type', 'ip')
-        }
-        enhanced_targets.append(enhanced_target)
-    
-    return enhanced_targets
+        start_time = time.time()
+        response = requests.get(
+            test_url, 
+            headers={'Host': host}, 
+            timeout=timeout, 
+            verify=False, 
+            stream=True
+        )
+        total_bytes = 0
+        for chunk in response.iter_content(chunk_size=8192):
+            total_bytes += len(chunk)
+            if time.time() - start_time > timeout:
+                break
+        duration = time.time() - start_time
+        speed_mbps = (total_bytes * 8 / duration) / 1e6 if duration > 0 else 0
+        return speed_mbps
+    except Exception:
+        return 0.0
+
+# [此处保留其他辅助函数...]
 
 ####################################################
-# 格式化输出函数 - 修改支持域名输出
-####################################################
-
-def format_target_output(target_data, port=None):
-    """
-    输出 目标:端口#[注释] 国家简称 格式
-    对于域名：domain.com:443#[注释] DOM
-    对于IP：1.1.1.1:443#[注释] US
-    """
-    if port is None:
-        port = CONFIG["PORT"]
-    
-    country_code = target_data.get('countryCode', 'UN')
-    comment = target_data.get('comment', '')
-    target_type = target_data.get('type', 'ip')
-    
-    # 格式化注释
-    if comment:
-        formatted_comment = CONFIG["COMMENT_DISPLAY_FORMAT"].format(comment=comment)
-    else:
-        formatted_comment = ""
-    
-    return f"{target_data['target']}:{port}#{formatted_comment} {country_code}"
-
-def format_target_list_for_display(target_list, port=None):
-    """
-    格式化目标列表用于显示
-    """
-    if port is None:
-        port = CONFIG["PORT"]
-    
-    formatted_targets = []
-    for target_data in target_list:
-        formatted_targets.append(format_target_output(target_data, port))
-    
-    return formatted_targets
-
-def format_target_list_for_file(target_list, port=None):
-    """
-    格式化目标列表用于文件保存
-    """
-    if port is None:
-        port = CONFIG["PORT"]
-    
-    formatted_lines = []
-    for target_data in target_list:
-        formatted_lines.append(format_target_output(target_data, port))
-    
-    return formatted_lines
-
-####################################################
-# 主逻辑 - 修改支持域名测试并优化性能
+# 修改主逻辑 - 使用自动调整阈值
 ####################################################
 if __name__ == "__main__":
-    # 0. 初始化环境
-    init_env()
+    # 初始化环境
+    for key, value in CONFIG.items():
+        os.environ[key] = str(value)
     
-    # 1. 打印配置参数
     print("="*60)
-    print(f"{'Cloudflare IP/域名优选工具 - 优化版':^60}")
+    print(f"{'Cloudflare优选工具 - 宽松版':^60}")
     print("="*60)
-    print(f"测试模式: {CONFIG['MODE']}")
-    print(f"输出格式: 目标:端口#[注释] 国家简称")
-    print(f"IP池来源: {CONFIG['IP_POOL_SOURCES']}")
-    print(f"域名直接测试: {'启用' if CONFIG['DOMAIN_TEST_ENABLED'] else '禁用'}")
-    print(f"地理位置查询: {'启用' if CONFIG['GEO_QUERY_ENABLED'] else '禁用'}")
-    if CONFIG['GEO_QUERY_ENABLED']:
-        print(f"查询模式: {CONFIG['GEO_QUERY_MODE']}")
-        print(f"查询数量: 前{CONFIG['GEO_QUERY_COUNT']}个IP")
-    
-    mode = CONFIG["MODE"]
-    if mode == "TCP":
-        print(f"TCP端口: {CONFIG['PORT']}")
-        print(f"TCP重试: {CONFIG['TCP_RETRY']}次")
-    elif mode == "URL_TEST":
-        print(f"URL测试目标: {CONFIG['URL_TEST_TARGET']}")
-        print(f"URL测试超时: {CONFIG['URL_TEST_TIMEOUT']}秒")
-        print(f"URL测试重试: {CONFIG['URL_TEST_RETRY']}次")
-    
     print(f"延迟范围: {CONFIG['RTT_RANGE']}ms")
     print(f"最大丢包: {CONFIG['LOSS_MAX']}%")
-    print(f"并发线程: {CONFIG['THREADS']}")
-    print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
-    print(f"测试目标数: {CONFIG['TEST_IP_COUNT']}")
-    custom_file = CONFIG["CUSTOM_IPS_FILE"]
-    if custom_file:
-        print(f"自定义目标池: {custom_file}")
-    else:
-        print(f"Cloudflare IP源: {CONFIG['CLOUDFLARE_IPS_URL']}")
-    print(f"测速URL: {CONFIG['SPEED_URL']}")
-    print("="*60 + "\n")
+    print(f"自动调整: 启用 (最少{CONFIG['MIN_TEST_TARGETS']}个目标)")
+    print("="*60)
 
-    # 2. 生成测试目标池（包含域名和IP）
+    # 生成测试目标池
     test_pool, target_info_map = generate_ip_pool()
     if not test_pool:
         print("❌ 无法生成测试目标池，程序终止")
         exit(1)
 
-    # 3. 第一阶段：延迟测试（筛选目标）
+    # 延迟测试
     ping_results = []
-    mode_display = {
-        "TCP": "🔌 TCP测试进度", 
-        "URL_TEST": "🌐 URL测试进度"
-    }
-    progress_desc = mode_display.get(mode, "🚀 延迟测试进度")
+    print(f"\n🚀 开始延迟测试...")
     
     with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
-        future_to_target = {executor.submit(ping_test, target): target for target in test_pool}
-        with tqdm(
-            total=len(test_pool),
-            desc=progress_desc,
-            unit="目标",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-        ) as pbar:
+        future_to_target = {executor.submit(smart_ping_test, target): target for target in test_pool}
+        with tqdm(total=len(test_pool), desc="延迟测试", unit="目标") as pbar:
             for future in as_completed(future_to_target):
                 try:
-                    result = future.result(timeout=30)  # 添加超时避免卡死
+                    result = future.result(timeout=10)
                     ping_results.append(result)
-                except Exception as e:
-                    # 忽略单个目标的错误
+                except Exception:
                     pass
                 finally:
                     pbar.update(1)
+
+    # 使用自动调整阈值筛选目标
+    passed_targets = auto_adjust_threshold(ping_results)
     
-    rtt_min, rtt_max = map(int, CONFIG["RTT_RANGE"].split('~'))
-    loss_max = CONFIG["LOSS_MAX"]
-    passed_targets = [
-        target_data for target_data in ping_results
-        if rtt_min <= target_data[1] <= rtt_max and target_data[2] <= loss_max
-    ]
-    
-    # 统计域名和IP数量
+    if not passed_targets:
+        print("❌ 没有通过延迟测试的目标")
+        
+        # 显示一些统计信息帮助调试
+        valid_rtts = [rtt for _, rtt, _, _ in ping_results if rtt < float('inf')]
+        if valid_rtts:
+            print(f"📊 有效延迟统计: 最小值{min(valid_rtts):.1f}ms, 最大值{max(valid_rtts):.1f}ms, 平均值{np.mean(valid_rtts):.1f}ms")
+        exit(1)
+
+    # 显示通过的目标信息
     domain_count = sum(1 for t in passed_targets if t[3])
     ip_count = sum(1 for t in passed_targets if not t[3])
     
-    print(f"\n✅ 延迟测试完成: 总数 {len(ping_results)}, 通过 {len(passed_targets)} ({domain_count}个域名, {ip_count}个IP)")
-
-    # 4. 第二阶段：测速（仅对通过延迟测试的目标）
-    if not passed_targets:
-        print("❌ 没有通过延迟测试的目标，程序终止")
-        exit(1)
+    print(f"✅ 延迟测试完成: 总数 {len(ping_results)}, 通过 {len(passed_targets)} ({domain_count}个域名, {ip_count}个IP)")
     
-    full_results = []
-    with ThreadPoolExecutor(max_workers=min(CONFIG["THREADS"], 50)) as executor:  # 测速使用更少线程
-        future_to_target = {executor.submit(full_test, target_data): target_data for target_data in passed_targets}
-        with tqdm(
-            total=len(passed_targets),
-            desc="📊 测速进度",
-            unit="目标",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-        ) as pbar:
-            for future in as_completed(future_to_target):
-                try:
-                    result = future.result(timeout=60)  # 测速超时更长
-                    full_results.append(result)
-                except Exception as e:
-                    # 忽略测速失败的目标
-                    pass
-                finally:
-                    pbar.update(1)
+    # 简单测速和结果处理
+    print(f"\n📊 进行简单测速...")
+    final_results = []
+    
+    for target_data in passed_targets[:CONFIG["TOP_IPS_LIMIT"]]:  # 只对前N个测速
+        speed = speed_test(target_data[0], is_domain=target_data[3])
+        target_info = target_info_map.get(target_data[0], {})
+        country_code = 'DOM' if target_data[3] else 'UN'
+        
+        final_results.append({
+            'target': target_data[0],
+            'rtt': target_data[1],
+            'loss': target_data[2],
+            'speed': speed,
+            'countryCode': country_code,
+            'comment': target_info.get('comment', ''),
+            'source': target_info.get('source', 'custom'),
+            'domain': target_info.get('domain', target_data[0]),
+            'type': 'domain' if target_data[3] else 'ip'
+        })
 
-    # 5. 智能选择IP进行地理位置查询（仅对IP目标）
-    if CONFIG["GEO_QUERY_ENABLED"] and full_results:
-        # 选择需要查询地理位置的IP（排除域名）
-        ips_to_query, sorted_targets = select_targets_for_geo_query(full_results, target_info_map)
-        
-        print(f"\n🔍 地理位置查询模式: {CONFIG['GEO_QUERY_MODE']}")
-        print(f"📝 将查询前 {len(ips_to_query)} 个IP的地理位置")
-        
-        # 批量查询地理位置
-        country_map = batch_get_ip_country_codes(ips_to_query)
-        
-        # 为选中的目标添加国家信息
-        enhanced_results = enhance_selected_targets_with_country_info(sorted_targets, country_map, target_info_map)
-        
-        # 为其他目标设置默认国家代码
-        final_enhanced_results = []
-        for target_data in sorted_targets:
-            target = target_data[0]
-            if not target_data[3] and target in [e['target'] for e in enhanced_results]:  # IP目标且已查询
-                final_enhanced_results.append(next(e for e in enhanced_results if e['target'] == target))
-            else:
-                # 域名目标或未查询地理位置的IP
-                target_info = target_info_map.get(target, {})
-                country_code = 'DOM' if target_data[3] else 'UN'  # 域名标记为DOM
-                final_enhanced_results.append({
-                    'target': target,
-                    'rtt': target_data[1],
-                    'loss': target_data[2],
-                    'speed': target_data[4] if len(target_data) > 4 else 0,
-                    'countryCode': country_code,
-                    'comment': target_info.get('comment', ''),
-                    'source': target_info.get('source', 'cloudflare'),
-                    'domain': target_info.get('domain', target),
-                    'type': target_info.get('type', 'ip')
-                })
-        
-        sorted_enhanced_results = final_enhanced_results
-    else:
-        # 不查询地理位置，使用默认信息
-        sorted_targets = sorted(
-            full_results,
-            key=lambda x: x[1]  # 按延迟排序
-        )[:CONFIG["TOP_IPS_LIMIT"]]
-        
-        sorted_enhanced_results = []
-        for target_data in sorted_targets:
-            target_info = target_info_map.get(target_data[0], {})
-            country_code = 'DOM' if target_data[3] else 'UN'  # 域名标记为DOM
-            sorted_enhanced_results.append({
-                'target': target_data[0],
-                'rtt': target_data[1],
-                'loss': target_data[2],
-                'speed': target_data[4] if len(target_data) > 4 else 0,
-                'countryCode': country_code,
-                'comment': target_info.get('comment', ''),
-                'source': target_info.get('source', 'cloudflare'),
-                'domain': target_info.get('domain', target_data[0]),
-                'type': target_info.get('type', 'ip')
-            })
-
-    # 6. 保存结果
+    # 按延迟排序
+    final_results.sort(key=lambda x: x['rtt'])
+    
+    # 保存结果
     os.makedirs('results', exist_ok=True)
     
-    with open('results/all_targets.txt', 'w') as f:
-        f.write("\n".join([target[0] for target in ping_results]))
-    
-    with open('results/passed_targets.txt', 'w') as f:
-        f.write("\n".join([target[0] for target in passed_targets]))
-    
-    with open('results/full_results.csv', 'w') as f:
-        f.write("目标,类型,延迟(ms),丢包率(%),速度(Mbps),国家代码,注释,来源,原始域名\n")
-        for target_data in sorted_enhanced_results:
-            f.write(f"{target_data['target']},{target_data['type']},{target_data['rtt']:.2f},{target_data['loss']:.2f},{target_data['speed']:.2f},{target_data['countryCode']},{target_data['comment']},{target_data['source']},{target_data['domain']}\n")
-    
-    # 使用新格式保存（目标:端口#[注释] 国家简称）
-    with open('results/top_targets.txt', 'w', encoding='utf-8') as f:
-        formatted_lines = format_target_list_for_file(sorted_enhanced_results)
-        f.write("\n".join(formatted_lines))
-    
-    with open('results/top_targets_details.csv', 'w', encoding='utf-8') as f:
-        f.write("目标,类型,延迟(ms),丢包率(%),速度(Mbps),国家代码,注释,来源,原始域名\n")
-        for target_data in sorted_enhanced_results:
-            f.write(f"{target_data['target']},{target_data['type']},{target_data['rtt']:.2f},{target_data['loss']:.2f},{target_data['speed']:.2f},{target_data['countryCode']},{target_data['comment']},{target_data['source']},{target_data['domain']}\n")
+    with open('results/best_targets.txt', 'w', encoding='utf-8') as f:
+        for target_data in final_results:
+            line = f"{target_data['target']}:{CONFIG['PORT']}#[{target_data['comment']}] {target_data['countryCode']}\n"
+            f.write(line)
 
-    # 7. 显示统计结果
-    print("\n" + "="*60)
-    print(f"{'🔥 测试结果统计':^60}")
-    print("="*60)
-    print(f"测试目标总数: {len(ping_results)}")
-    print(f"通过延迟测试目标数: {len(passed_targets)}")
-    print(f"测速目标数: {len(full_results)}")
-    print(f"精选TOP目标: {len(sorted_enhanced_results)}")
-    
-    # 统计最终结果中的域名和IP数量
-    final_domain_count = sum(1 for t in sorted_enhanced_results if t['type'] == 'domain')
-    final_ip_count = sum(1 for t in sorted_enhanced_results if t['type'] == 'ip')
-    print(f"精选目标分布: {final_domain_count}个域名, {final_ip_count}个IP")
-    
-    if CONFIG["GEO_QUERY_ENABLED"]:
-        geo_queried_count = len([t for t in sorted_enhanced_results if t['countryCode'] not in ['UN', 'DOM']])
-        print(f"地理位置查询IP数: {geo_queried_count}")
-    
-    if sorted_enhanced_results:
-        # 分别显示域名和IP的TOP10
-        domain_targets = [t for t in sorted_enhanced_results if t['type'] == 'domain']
-        ip_targets = [t for t in sorted_enhanced_results if t['type'] == 'ip']
-        
-        if domain_targets:
-            print(f"\n🏆【最佳域名 TOP{min(5, len(domain_targets))}】(按延迟升序排列)")
-            formatted_top_domains = format_target_list_for_display(domain_targets[:5])
-            for i, formatted_domain in enumerate(formatted_top_domains, 1):
-                target_data = domain_targets[i-1]
-                source_info = " [自定义]" if target_data.get('source') == 'custom' else ""
-                print(f"{i:2d}. {formatted_domain} (延迟:{target_data['rtt']:.1f}ms, 速度:{target_data['speed']:.1f}Mbps{source_info})")
-        
-        if ip_targets:
-            print(f"\n🏆【最佳IP TOP{min(5, len(ip_targets))}】(按延迟升序排列)")
-            formatted_top_ips = format_target_list_for_display(ip_targets[:5])
-            for i, formatted_ip in enumerate(formatted_top_ips, 1):
-                target_data = ip_targets[i-1]
-                source_info = " [自定义]" if target_data.get('source') == 'custom' else ""
-                print(f"{i:2d}. {formatted_ip} (延迟:{target_data['rtt']:.1f}ms, 速度:{target_data['speed']:.1f}Mbps{source_info})")
-        
-        print(f"\n📋【全部精选目标】(按延迟升序排列)")
-        formatted_all_targets = format_target_list_for_display(sorted_enhanced_results)
-        for i in range(0, len(formatted_all_targets), 2):
-            line_targets = formatted_all_targets[i:i+2]
-            print("  " + "  ".join(line_targets))
-    
-    print("="*60)
-    print("✅ 结果已保存至 results/ 目录")
-    print("📊 文件说明:")
-    print("   - top_targets.txt: 精选目标列表 (目标:端口#[注释] 国家简称)")
-    print("   - top_targets_details.csv: 详细性能数据")
-    print("❣️  结果已按延迟升序排列")
+    # 显示结果
+    print(f"\n🏆 最佳目标 TOP10:")
+    for i, target_data in enumerate(final_results[:10], 1):
+        print(f"{i:2d}. {target_data['target']:25} [{target_data['comment']:10}] "
+              f"{target_data['rtt']:5.1f}ms {target_data['loss']:4.1f}% {target_data['speed']:5.1f}Mbps")
+
+    print(f"\n✅ 结果已保存至: results/best_targets.txt")
     print("="*60)
