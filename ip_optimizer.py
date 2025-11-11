@@ -20,24 +20,25 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 配置参数
 ####################################################
 CONFIG = {
+    "VERSION": "1.0",  # 版本号
     "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
-    "PORT": 443,  # TCP测试端口
+    "PORT": 8443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
-    "IP_POOL_SIZE": 60000,  # IP池总大小
-    "TEST_IP_COUNT": 3000,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 50,  # 精选IP数量（增加到200用于地理位置测试）
+    "IP_POOL_SIZE": 100000,  # IP池总大小
+    "TEST_IP_COUNT": 5000,  # 实际测试IP数量
+    "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段
-    "GEO_TEST_LIMIT": 100,  # 地理位置测试数量限制
+    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
+    "GEO_TEST_LIMIT": 200,  # 地理位置测试数量限制
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -59,10 +60,10 @@ CONFIG = {
         'TH': '🇹🇭', 'MY': '🇲🇾', 'ID': '🇮🇩', 'VN': '🇻🇳', 'PH': '🇵🇭',
         'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
         'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
-        'UN': '🏴'  # 未知国家
+        'UN': '🏴'  # 未知
     },
     
-    # 国家代码到中文名称的映射（特殊格式）
+    # 国家代码到中文名称的映射
     "COUNTRY_NAMES": {
         'CN': '中·国',
         'TW': '台·湾',
@@ -131,6 +132,7 @@ ip_geo_cache = {}
 
 # 自定义IP标记跟踪和注释信息
 custom_ip_comments = {}  # 记录每个IP/域名的注释信息
+custom_ip_country_codes = {}  # 记录自定义的国家代码
 
 ####################################################
 # IP地理位置查询函数
@@ -446,10 +448,10 @@ def parse_custom_ips_file():
     ip_subnets = set()
     
     if not os.path.exists(custom_file):
-        print(f"❌ 自定义IP文件 {custom_file} 不存在")
+        print(f"自定义IP文件 {custom_file} 不存在")
         return domains, individual_ips, ip_subnets
     
-    print(f"🔧 读取自定义IP池文件: {custom_file}")
+    print(f"读取自定义IP池文件: {custom_file}")
     try:
         with open(custom_file, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
@@ -479,7 +481,12 @@ def parse_custom_ips_file():
                     ip_obj = ipaddress.ip_address(content)
                     individual_ips.add(content)
                     if comment:
-                        custom_ip_comments[content] = comment
+                        # 检查注释是否为有效的国家代码
+                        if comment.upper() in CONFIG["COUNTRY_FLAGS"]:
+                            custom_ip_country_codes[content] = comment.upper()
+                            custom_ip_comments[content] = ""  # 国家代码不作为注释显示
+                        else:
+                            custom_ip_comments[content] = comment
                     continue
                 except ValueError:
                     pass
@@ -489,14 +496,26 @@ def parse_custom_ips_file():
                     network = ipaddress.ip_network(content, strict=False)
                     ip_subnets.add(str(network))
                 except ValueError:
-                    print(f"⚠️ 第{line_num}行格式错误: {line}")
+                    print(f"第{line_num}行格式错误: {line}")
         
-        print(f"✅ 自定义IP池解析完成: {len(domains)}个域名, {len(individual_ips)}个独立IP, {len(ip_subnets)}个IP段")
+        print(f"自定义IP池解析完成: {len(domains)}个域名, {len(individual_ips)}个独立IP, {len(ip_subnets)}个IP段")
+        if custom_ip_country_codes:
+            print(f"发现 {len(custom_ip_country_codes)} 个IP带有预定义国家代码")
         
     except Exception as e:
-        print(f"🚨 读取自定义IP池失败: {e}")
+        print(f"读取自定义IP池失败: {e}")
     
     return domains, individual_ips, ip_subnets
+
+def fetch_ip_ranges():
+    """获取Cloudflare官方IP段"""
+    url = CONFIG["CLOUDFLARE_IPS_URL"]
+    try:
+        res = requests.get(url, timeout=10, verify=False)
+        return res.text.splitlines()
+    except Exception as e:
+        print(f"获取Cloudflare官方IP段失败: {e}")
+    return []
 
 def generate_random_ip(subnet):
     """根据CIDR生成子网内的随机合法IP"""
@@ -523,7 +542,7 @@ def generate_ip_pool():
     sources_config = CONFIG["IP_POOL_SOURCES"]
     sources = [s.strip() for s in sources_config.split(',')]
     
-    print(f"📊 IP池来源配置: {sources_config}")
+    print(f"IP池来源配置: {sources_config}")
     
     total_target_pool = set()
     
@@ -535,16 +554,16 @@ def generate_ip_pool():
         # 添加独立IP
         total_target_pool.update(individual_ips)
         
-        print(f"✅ 来源1 - 自定义域名和IP: {len(domains)}个域名, {len(individual_ips)}个IP")
+        print(f"来源1 - 自定义域名和IP: {len(domains)}个域名, {len(individual_ips)}个IP")
     
     # 2. 自定义IP段
     if '2' in sources:
         _, _, custom_subnets = parse_custom_ips_file()
-        custom_ip_count = CONFIG["IP_POOL_SIZE"] // 2  # 分配1/2给自定义IP段
+        custom_ip_count = CONFIG["IP_POOL_SIZE"] // 3  # 分配1/3给自定义IP段
         
         custom_ip_pool = set()
         if custom_subnets:
-            print(f"🔧 从 {len(custom_subnets)} 个自定义IP段生成IP...")
+            print(f"从 {len(custom_subnets)} 个自定义IP段生成IP...")
             with tqdm(total=min(custom_ip_count, len(custom_subnets) * 10), 
                      desc="生成自定义IP段", unit="IP") as pbar:
                 while len(custom_ip_pool) < custom_ip_count and custom_subnets:
@@ -555,17 +574,38 @@ def generate_ip_pool():
                         pbar.update(1)
         
         total_target_pool.update(custom_ip_pool)
-        print(f"✅ 来源2 - 自定义IP段: {len(custom_ip_pool)} 个IP")
+        print(f"来源2 - 自定义IP段: {len(custom_ip_pool)} 个IP")
+    
+    # 3. 官方Cloudflare IP池
+    if '3' in sources:
+        cf_subnets = fetch_ip_ranges()
+        if not cf_subnets:
+            print("无法获取Cloudflare官方IP段")
+        else:
+            cf_ip_count = CONFIG["IP_POOL_SIZE"] // 3  # 分配1/3给官方IP
+            
+            cf_ip_pool = set()
+            print(f"从 {len(cf_subnets)} 个Cloudflare官方IP段生成IP...")
+            with tqdm(total=cf_ip_count, desc="生成官方IP", unit="IP") as pbar:
+                while len(cf_ip_pool) < cf_ip_count:
+                    subnet = random.choice(list(cf_subnets))
+                    ip = generate_random_ip(subnet)
+                    if ip not in cf_ip_pool and ip not in total_target_pool:
+                        cf_ip_pool.add(ip)
+                        pbar.update(1)
+            
+            total_target_pool.update(cf_ip_pool)
+            print(f"来源3 - 官方Cloudflare IP池: {len(cf_ip_pool)} 个IP")
     
     full_target_pool = list(total_target_pool)
     random.shuffle(full_target_pool)
     
-    print(f"✅ 目标池生成完成: 总计 {len(full_target_pool)} 个目标（包含域名和IP）")
+    print(f"目标池生成完成: 总计 {len(full_target_pool)} 个目标（包含域名和IP）")
     
     # 抽样测试目标
     test_target_count = min(CONFIG["TEST_IP_COUNT"], len(full_target_pool))
     test_target_pool = random.sample(full_target_pool, test_target_count)
-    print(f"🔧 随机选择 {len(test_target_pool)} 个目标进行测试")
+    print(f"随机选择 {len(test_target_pool)} 个目标进行测试")
     
     return test_target_pool
 
@@ -600,7 +640,7 @@ def enhance_target_with_country_info(target_list):
     geo_test_limit = min(CONFIG["GEO_TEST_LIMIT"], len(target_list))
     target_list_for_geo = target_list[:geo_test_limit]
     
-    print(f"🌍 正在检测前{geo_test_limit}个目标的地理位置...")
+    print(f"正在检测前{geo_test_limit}个目标的地理位置...")
     with tqdm(total=geo_test_limit, desc="目标地理位置", unit="目标") as pbar:
         for target_data in target_list_for_geo:
             target = target_data[0]
@@ -608,14 +648,19 @@ def enhance_target_with_country_info(target_list):
             loss = target_data[2]
             speed = target_data[3] if len(target_data) > 3 else 0
             
-            # 只有IP地址才进行地理位置查询，域名使用默认值
-            try:
-                # 尝试解析为IP地址
-                ipaddress.ip_address(target)
-                country_code = get_real_ip_country_code(target)
-            except ValueError:
-                # 如果是域名，使用默认值
-                country_code = 'UN'
+            # 检查是否有预定义的国家代码
+            if target in custom_ip_country_codes:
+                country_code = custom_ip_country_codes[target]
+                print(f"使用预定义国家代码: {target} -> {country_code}")
+            else:
+                # 只有IP地址才进行地理位置查询，域名使用默认值
+                try:
+                    # 尝试解析为IP地址
+                    ipaddress.ip_address(target)
+                    country_code = get_real_ip_country_code(target)
+                except ValueError:
+                    # 如果是域名，使用默认值
+                    country_code = 'UN'
             
             enhanced_target = {
                 'target': target,
@@ -636,12 +681,18 @@ def enhance_target_with_country_info(target_list):
         loss = target_data[2]
         speed = target_data[3] if len(target_data) > 3 else 0
         
+        # 检查是否有预定义的国家代码
+        if target in custom_ip_country_codes:
+            country_code = custom_ip_country_codes[target]
+        else:
+            country_code = 'UN'
+        
         enhanced_target = {
             'target': target,
             'rtt': rtt,
             'loss': loss,
             'speed': speed,
-            'countryCode': 'UN',
+            'countryCode': country_code,
             'isp': "Cloudflare",
             'comment': custom_ip_comments.get(target, '')
         }
@@ -712,7 +763,7 @@ if __name__ == "__main__":
     
     # 1. 打印配置参数
     print("="*60)
-    print(f"{'Cloudflare IP优选工具':^60}")
+    print(f"{'Cloudflare IP优选工具 v' + CONFIG['VERSION']:^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: 目标:端口#国旗国家名称·国家代码注释")
@@ -740,16 +791,16 @@ if __name__ == "__main__":
     # 2. 生成目标池（包含域名和IP）
     test_target_pool = generate_ip_pool()
     if not test_target_pool:
-        print("❌ 无法生成目标池，程序终止")
+        print("无法生成目标池，程序终止")
         exit(1)
 
     # 3. 第一阶段：延迟测试（筛选目标）
     ping_results = []
     mode_display = {
-        "TCP": "🔌 TCP测试进度", 
-        "URL_TEST": "🌐 URL测试进度"
+        "TCP": "TCP测试进度", 
+        "URL_TEST": "URL测试进度"
     }
-    progress_desc = mode_display.get(mode, "🚀 延迟测试进度")
+    progress_desc = mode_display.get(mode, "延迟测试进度")
     
     with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
         future_to_target = {executor.submit(ping_test, target): target for target in test_target_pool}
@@ -763,7 +814,7 @@ if __name__ == "__main__":
                 try:
                     ping_results.append(future.result())
                 except Exception as e:
-                    print(f"\n🔧 延迟测试异常: {e}")
+                    print(f"延迟测试异常: {e}")
                 finally:
                     pbar.update(1)
     
@@ -776,11 +827,11 @@ if __name__ == "__main__":
         target_data for target_data in ping_results
         if rtt_min <= target_data[1] <= rtt_max and target_data[2] <= loss_max
     ]
-    print(f"\n✅ 延迟测试完成: 总数 {len(ping_results)}, 通过 {len(passed_targets)}")
+    print(f"延迟测试完成: 总数 {len(ping_results)}, 通过 {len(passed_targets)}")
 
     # 4. 第二阶段：测速（仅对通过延迟测试的目标）
     if not passed_targets:
-        print("❌ 没有通过延迟测试的目标，程序终止")
+        print("没有通过延迟测试的目标，程序终止")
         exit(1)
     
     full_results = []
@@ -788,7 +839,7 @@ if __name__ == "__main__":
         future_to_target = {executor.submit(full_test, target_data): target_data for target_data in passed_targets}
         with tqdm(
             total=len(passed_targets),
-            desc="📊 测速进度",
+            desc="测速进度",
             unit="目标",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
         ) as pbar:
@@ -796,7 +847,7 @@ if __name__ == "__main__":
                 try:
                     full_results.append(future.result())
                 except Exception as e:
-                    print(f"\n🔧 测速异常: {e}")
+                    print(f"测速异常: {e}")
                 finally:
                     pbar.update(1)
 
@@ -840,7 +891,7 @@ if __name__ == "__main__":
 
     # 8. 显示统计结果
     print("\n" + "="*60)
-    print(f"{'🔥 测试结果统计':^60}")
+    print(f"{'测试结果统计':^60}")
     print("="*60)
     print(f"目标池大小: {CONFIG['IP_POOL_SIZE']}")
     print(f"实际测试目标数: {len(ping_results)}")
@@ -850,22 +901,22 @@ if __name__ == "__main__":
     print(f"地理位置测试目标数: {min(CONFIG['GEO_TEST_LIMIT'], len(passed_targets))}")
     
     if sorted_targets:
-        print(f"\n🏆【最佳目标 TOP10】(按延迟升序排列)")
+        print(f"【最佳目标 TOP10】(按延迟升序排列)")
         formatted_top_targets = format_target_list_for_display(sorted_targets[:10])
         for i, formatted_target in enumerate(formatted_top_targets, 1):
             target_data = sorted_targets[i-1]
             print(f"{i:2d}. {formatted_target} (延迟:{target_data['rtt']:.1f}ms, 速度:{target_data['speed']:.1f}Mbps)")
         
-        print(f"\n📋【全部精选目标】(按延迟升序排列)")
+        print(f"【全部精选目标】(按延迟升序排列)")
         formatted_all_targets = format_target_list_for_display(sorted_targets)
         for i in range(0, len(formatted_all_targets), 2):
             line_targets = formatted_all_targets[i:i+2]
             print("  " + "  ".join(line_targets))
     
     print("="*60)
-    print("✅ 结果已保存至 results/ 目录")
-    print("📊 文件说明:")
+    print("结果已保存至 results/ 目录")
+    print("文件说明:")
     print("   - top_targets.txt: 精选目标列表 (目标:端口#国旗国家名称·国家代码注释)")
     print("   - top_targets_details.csv: 详细性能数据")
-    print("❣️  结果已按延迟升序排列")
+    print("结果已按延迟升序排列")
     print("="*60)
