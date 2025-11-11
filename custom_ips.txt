@@ -1,5 +1,16 @@
 cf.090227.xyz
 ip2.242625.xyz
-
+mfa.gov.ua#域名01
+saas.sin.fan#域名02
+store.ubi.com#域名03
+cf.130519.xyz#域名04
+cf.008500.xyz#域名05
+cf.090227.xyz#域名06
+cf.877774.xyz#域名07
+cdns.doon.eu.org#域名08
+sub.danfeng.eu.org#域名09
+cf.zhetengsha.eu.org#域名10
 
 104.16.0.0/14
+104.19.154.0/24
+198.41.208.0/24
