@@ -25,7 +25,7 @@ CONFIG = {
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
     "PORT": 8443,  # TCP测试端口
-    "RTT_RANGE": "0~100",  # 延迟范围(ms)
+    "RTT_RANGE": "0~40",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
@@ -37,6 +37,11 @@ CONFIG = {
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     "IP_POOL_SOURCES": "1,2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
+    
+    # 新增配置：地理位置查询设置
+    "GEO_QUERY_ENABLED": True,  # 是否启用地理位置查询
+    "GEO_QUERY_MODE": "DELAY_FIRST",  # 查询模式：DELAY_FIRST=延迟优先, SPEED_FIRST=速度优先, BOTH=两者都查
+    "GEO_QUERY_COUNT": 50,  # 查询前多少个IP的地理位置
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -139,6 +144,21 @@ def get_real_ip_country_code(ip):
     
     # 如果所有API都失败，返回未知
     return 'UN'
+
+def batch_get_ip_country_codes(ip_list):
+    """
+    批量获取IP国家代码
+    """
+    results = {}
+    
+    print(f"🌍 批量检测 {len(ip_list)} 个IP的地理位置...")
+    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
+        for ip in ip_list:
+            country_code = get_real_ip_country_code(ip)
+            results[ip] = country_code
+            pbar.update(1)
+    
+    return results
 
 ####################################################
 # URL测试函数
@@ -577,33 +597,76 @@ def full_test(ip_data):
     speed = speed_test(ip)
     return (*ip_data, speed)
 
-def enhance_ip_with_country_info(ip_list):
+def select_ips_for_geo_query(ip_list):
     """
-    为IP列表添加真实的国家代码信息
+    根据配置模式选择需要查询地理位置的IP
+    返回: (要查询地理位置的IP列表, 排序后的完整IP列表)
+    """
+    geo_mode = CONFIG["GEO_QUERY_MODE"]
+    query_count = CONFIG["GEO_QUERY_COUNT"]
+    
+    if geo_mode == "DELAY_FIRST":
+        # 延迟优先：按延迟升序排列
+        sorted_ips = sorted(ip_list, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
+        ips_to_query = [ip_data[0] for ip_data in sorted_ips[:query_count]]
+        
+    elif geo_mode == "SPEED_FIRST":
+        # 速度优先：按速度降序排列（需要先进行速度测试）
+        if len(ip_list[0]) > 3:  # 确保有速度数据
+            sorted_ips = sorted(ip_list, key=lambda x: x[3] if len(x) > 3 else 0, reverse=True)[:CONFIG["TOP_IPS_LIMIT"]]
+        else:
+            # 如果没有速度数据，回退到延迟优先
+            sorted_ips = sorted(ip_list, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
+        ips_to_query = [ip_data[0] for ip_data in sorted_ips[:query_count]]
+        
+    elif geo_mode == "BOTH":
+        # 两者都查：取延迟前一半和速度前一半
+        delay_sorted = sorted(ip_list, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
+        if len(ip_list[0]) > 3:  # 确保有速度数据
+            speed_sorted = sorted(ip_list, key=lambda x: x[3] if len(x) > 3 else 0, reverse=True)[:CONFIG["TOP_IPS_LIMIT"]]
+        else:
+            speed_sorted = delay_sorted
+        
+        # 合并并去重
+        half_count = query_count // 2
+        ips_to_query = list(set(
+            [ip_data[0] for ip_data in delay_sorted[:half_count]] +
+            [ip_data[0] for ip_data in speed_sorted[:half_count]]
+        ))[:query_count]
+        
+        # 最终的排序列表（延迟优先）
+        sorted_ips = delay_sorted
+    else:
+        # 默认延迟优先
+        sorted_ips = sorted(ip_list, key=lambda x: x[1])[:CONFIG["TOP_IPS_LIMIT"]]
+        ips_to_query = [ip_data[0] for ip_data in sorted_ips[:query_count]]
+    
+    return ips_to_query, sorted_ips
+
+def enhance_selected_ips_with_country_info(ip_list, country_map):
+    """
+    为选中的IP列表添加国家代码信息
     """
     enhanced_ips = []
     
-    print("🌍 正在检测IP真实地理位置...")
-    with tqdm(total=len(ip_list), desc="IP地理位置", unit="IP") as pbar:
-        for ip_data in ip_list:
-            ip = ip_data[0]
-            rtt = ip_data[1]
-            loss = ip_data[2]
-            speed = ip_data[3] if len(ip_data) > 3 else 0
-            
-            country_code = get_real_ip_country_code(ip)
-            
-            enhanced_ip = {
-                'ip': ip,
-                'rtt': rtt,
-                'loss': loss,
-                'speed': speed,
-                'countryCode': country_code,
-                'isp': "Cloudflare",
-                'source': custom_ip_sources.get(ip, 'cloudflare')  # 添加来源信息
-            }
-            enhanced_ips.append(enhanced_ip)
-            pbar.update(1)
+    for ip_data in ip_list:
+        ip = ip_data[0]
+        rtt = ip_data[1]
+        loss = ip_data[2]
+        speed = ip_data[3] if len(ip_data) > 3 else 0
+        
+        country_code = country_map.get(ip, 'UN')
+        
+        enhanced_ip = {
+            'ip': ip,
+            'rtt': rtt,
+            'loss': loss,
+            'speed': speed,
+            'countryCode': country_code,
+            'isp': "Cloudflare",
+            'source': custom_ip_sources.get(ip, 'cloudflare')
+        }
+        enhanced_ips.append(enhanced_ip)
     
     return enhanced_ips
 
@@ -666,7 +729,10 @@ if __name__ == "__main__":
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: ip:端口#国旗 国家简称✓ (✓表示自定义IP)")
     print(f"IP池来源: {CONFIG['IP_POOL_SOURCES']}")
-    print(f"地理位置API: 启用")
+    print(f"地理位置查询: {'启用' if CONFIG['GEO_QUERY_ENABLED'] else '禁用'}")
+    if CONFIG['GEO_QUERY_ENABLED']:
+        print(f"查询模式: {CONFIG['GEO_QUERY_MODE']}")
+        print(f"查询数量: 前{CONFIG['GEO_QUERY_COUNT']}个IP")
     
     mode = CONFIG["MODE"]
     if mode == "TCP":
@@ -750,16 +816,60 @@ if __name__ == "__main__":
                 finally:
                     pbar.update(1)
 
-    # 5. 为IP添加真实国家代码信息和来源标记
-    enhanced_results = enhance_ip_with_country_info(full_results)
+    # 5. 智能选择IP进行地理位置查询
+    if CONFIG["GEO_QUERY_ENABLED"] and full_results:
+        # 选择需要查询地理位置的IP
+        ips_to_query, sorted_ips = select_ips_for_geo_query(full_results)
+        
+        print(f"\n🔍 地理位置查询模式: {CONFIG['GEO_QUERY_MODE']}")
+        print(f"📝 将查询前 {len(ips_to_query)} 个IP的地理位置")
+        
+        # 批量查询地理位置
+        country_map = batch_get_ip_country_codes(ips_to_query)
+        
+        # 为选中的IP添加国家信息
+        enhanced_results = enhance_selected_ips_with_country_info(sorted_ips, country_map)
+        
+        # 为其他IP设置默认国家代码
+        final_enhanced_results = []
+        for ip_data in sorted_ips:
+            ip = ip_data[0]
+            if ip in [e['ip'] for e in enhanced_results]:
+                # 已经有地理位置信息的IP
+                final_enhanced_results.append(next(e for e in enhanced_results if e['ip'] == ip))
+            else:
+                # 没有查询地理位置的IP，使用默认信息
+                final_enhanced_results.append({
+                    'ip': ip,
+                    'rtt': ip_data[1],
+                    'loss': ip_data[2],
+                    'speed': ip_data[3] if len(ip_data) > 3 else 0,
+                    'countryCode': 'UN',
+                    'isp': "Cloudflare",
+                    'source': custom_ip_sources.get(ip, 'cloudflare')
+                })
+        
+        sorted_enhanced_results = final_enhanced_results
+    else:
+        # 不查询地理位置，使用默认信息
+        sorted_ips = sorted(
+            full_results,
+            key=lambda x: x[1]  # 按延迟排序
+        )[:CONFIG["TOP_IPS_LIMIT"]]
+        
+        sorted_enhanced_results = []
+        for ip_data in sorted_ips:
+            sorted_enhanced_results.append({
+                'ip': ip_data[0],
+                'rtt': ip_data[1],
+                'loss': ip_data[2],
+                'speed': ip_data[3] if len(ip_data) > 3 else 0,
+                'countryCode': 'UN',
+                'isp': "Cloudflare",
+                'source': custom_ip_sources.get(ip_data[0], 'cloudflare')
+            })
 
-    # 6. 按延迟升序排列
-    sorted_ips = sorted(
-        enhanced_results,
-        key=lambda x: x['rtt']
-    )[:CONFIG["TOP_IPS_LIMIT"]]
-
-    # 7. 保存结果（统一格式）
+    # 6. 保存结果（统一格式）
     os.makedirs('results', exist_ok=True)
     
     with open('results/all_ips.txt', 'w') as f:
@@ -770,39 +880,46 @@ if __name__ == "__main__":
     
     with open('results/full_results.csv', 'w') as f:
         f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
-        for ip_data in enhanced_results:
+        for ip_data in sorted_enhanced_results:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')}\n")
     
     # 所有输出文件都使用统一格式（包含✓标志）
     with open('results/top_ips.txt', 'w', encoding='utf-8') as f:
-        formatted_lines = format_ip_list_for_file(sorted_ips)
+        formatted_lines = format_ip_list_for_file(sorted_enhanced_results)
         f.write("\n".join(formatted_lines))
     
     with open('results/top_ips_details.csv', 'w', encoding='utf-8') as f:
         f.write("IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源\n")
-        for ip_data in sorted_ips:
+        for ip_data in sorted_enhanced_results:
             f.write(f"{ip_data['ip']},{ip_data['rtt']:.2f},{ip_data['loss']:.2f},{ip_data['speed']:.2f},{ip_data['countryCode']},{ip_data['isp']},{ip_data.get('source', 'cloudflare')}\n")
 
-    # 8. 显示统计结果
+    # 7. 显示统计结果
     print("\n" + "="*60)
     print(f"{'🔥 测试结果统计':^60}")
     print("="*60)
     print(f"IP池大小: {CONFIG['IP_POOL_SIZE']}")
     print(f"实际测试IP数: {len(ping_results)}")
     print(f"通过延迟测试IP数: {len(passed_ips)}")
-    print(f"测速IP数: {len(enhanced_results)}")
-    print(f"精选TOP IP: {len(sorted_ips)}")
+    print(f"测速IP数: {len(full_results)}")
+    print(f"精选TOP IP: {len(sorted_enhanced_results)}")
     
-    if sorted_ips:
-        print(f"\n🏆【最佳IP TOP10】(按延迟升序排列，✓表示自定义IP)")
-        formatted_top_ips = format_ip_list_for_display(sorted_ips[:10])
-        for i, formatted_ip in enumerate(formatted_top_ips, 1):
-            ip_data = sorted_ips[i-1]
-            source_info = " [自定义]" if ip_data.get('source') == 'custom' else ""
-            print(f"{i:2d}. {formatted_ip} (延迟:{ip_data['rtt']:.1f}ms, 速度:{ip_data['speed']:.1f}Mbps{source_info})")
+    if CONFIG["GEO_QUERY_ENABLED"]:
+        geo_queried_count = len([ip for ip in sorted_enhanced_results if ip['countryCode'] != 'UN'])
+        print(f"地理位置查询IP数: {geo_queried_count}")
+    
+    if sorted_enhanced_results:
+        # 显示有地理位置信息的IP
+        geo_ips = [ip for ip in sorted_enhanced_results if ip['countryCode'] != 'UN']
+        if geo_ips:
+            print(f"\n🏆【最佳IP TOP10】(按延迟升序排列，✓表示自定义IP)")
+            formatted_top_ips = format_ip_list_for_display(geo_ips[:10])
+            for i, formatted_ip in enumerate(formatted_top_ips, 1):
+                ip_data = geo_ips[i-1]
+                source_info = " [自定义]" if ip_data.get('source') == 'custom' else ""
+                print(f"{i:2d}. {formatted_ip} (延迟:{ip_data['rtt']:.1f}ms, 速度:{ip_data['speed']:.1f}Mbps{source_info})")
         
         print(f"\n📋【全部精选IP】(按延迟升序排列，✓表示自定义IP)")
-        formatted_all_ips = format_ip_list_for_display(sorted_ips)
+        formatted_all_ips = format_ip_list_for_display(sorted_enhanced_results)
         for i in range(0, len(formatted_all_ips), 2):
             line_ips = formatted_all_ips[i:i+2]
             print("  " + "  ".join(line_ips))
