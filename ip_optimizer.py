@@ -30,7 +30,7 @@ CONFIG = {
     "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
     "TEST_IP_COUNT": 2000,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 100,  # 精选IP数量（增加到200用于地理位置测试）
+    "TOP_IPS_LIMIT": 200,  # 精选IP数量（增加到200用于地理位置测试）
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
@@ -650,7 +650,7 @@ def enhance_target_with_country_info(target_list):
     return enhanced_targets
 
 ####################################################
-# 格式化输出函数 - 优化输出格式，添加国家名称
+# 格式化输出函数 - 优化输出格式，添加国家名称，无空格
 ####################################################
 
 def get_country_display_name(country_code):
@@ -662,7 +662,7 @@ def get_country_display_name(country_code):
 
 def format_target_output(target_data, port=None):
     """
-    输出 目标:端口#国旗 国家名称·国家代码 注释 格式
+    输出 目标:端口#国旗国家名称·国家代码注释 格式（无空格）
     """
     if port is None:
         port = CONFIG["PORT"]
@@ -673,9 +673,9 @@ def format_target_output(target_data, port=None):
     
     # 添加注释
     comment = target_data.get('comment', '')
-    comment_str = f" {comment}" if comment else ''
+    comment_str = f"{comment}" if comment else ''
     
-    return f"{target_data['target']}:{port}#{flag} {country_display}{comment_str}"
+    return f"{target_data['target']}:{port}#{flag}{country_display}{comment_str}"
 
 def format_target_list_for_display(target_list, port=None):
     """
@@ -715,7 +715,7 @@ if __name__ == "__main__":
     print(f"{'Cloudflare IP优选工具':^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
-    print(f"输出格式: 目标:端口#国旗 国家名称·国家代码 注释")
+    print(f"输出格式: 目标:端口#国旗国家名称·国家代码注释")
     print(f"目标池来源: {CONFIG['IP_POOL_SOURCES']}")
     print(f"地理位置API: 仅对前{CONFIG['GEO_TEST_LIMIT']}个IP目标启用")
     
@@ -865,7 +865,7 @@ if __name__ == "__main__":
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
     print("📊 文件说明:")
-    print("   - top_targets.txt: 精选目标列表 (目标:端口#国旗 国家名称·国家代码 注释)")
+    print("   - top_targets.txt: 精选目标列表 (目标:端口#国旗国家名称·国家代码注释)")
     print("   - top_targets_details.csv: 详细性能数据")
     print("❣️  结果已按延迟升序排列")
     print("="*60)
