@@ -36,7 +36,7 @@ CONFIG = {
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "1,2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段
+    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段
     "GEO_TEST_LIMIT": 100,  # 地理位置测试数量限制
     
     # 备用测试URL列表
