@@ -17,7 +17,7 @@ import ipaddress
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ####################################################
-# 配置参数
+# 配置参数 - 优化性能版本
 ####################################################
 CONFIG = {
     "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
@@ -27,16 +27,16 @@ CONFIG = {
     "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~40",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 500,  # 并发线程数
-    "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 2000,  # 实际测试IP数量
+    "THREADS": 300,  # 并发线程数避免被取消
+    "IP_POOL_SIZE": 50000,  # IP池总大小
+    "TEST_IP_COUNT": 1500,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
+    "IP_POOL_SOURCES": "1,2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=官方IP池
     
     # 新增配置：注释显示设置
     "DOMAIN_COMMENT_SEPARATOR": "#",  # 域名和注释的分隔符
@@ -64,7 +64,11 @@ CONFIG = {
     # 新增配置：域名测试设置
     "DOMAIN_TEST_ENABLED": True,  # 是否启用域名直接测试
     "DOMAIN_TEST_PORT": 443,  # 域名测试默认端口
-    "DOMAIN_TEST_PROTOCOL": "https"  # 域名测试默认协议
+    "DOMAIN_TEST_PROTOCOL": "https",  # 域名测试默认协议
+    
+    # 新增性能优化配置
+    "MAX_IPS_PER_SUBNET": 50,  # 每个IP段最大生成IP数
+    "MAX_GENERATION_ATTEMPTS": 1000,  # 最大生成尝试次数
 }
 
 # IP地理位置缓存
@@ -75,6 +79,99 @@ ip_details = {}  # 存储每个IP的详细信息：{ip: {"comment": "注释", "s
 
 # 域名详细信息存储
 domain_details = {}  # 存储每个域名的详细信息：{domain: {"comment": "注释", "source": "来源"}}
+
+####################################################
+# 优化的IP生成函数 - 解决性能问题
+####################################################
+
+def generate_random_ip_fast(subnet):
+    """
+    快速生成随机IP - 优化版本避免无限循环
+    """
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+        
+        # 对于小网络（/24及以上），直接列出所有主机
+        if network.prefixlen >= 24:
+            hosts = list(network.hosts())
+            if hosts:
+                return str(random.choice(hosts))
+            else:
+                # 如果没有可用主机，返回网络地址
+                return str(network.network_address)
+        
+        # 对于大网络，使用高效随机生成
+        network_addr = int(network.network_address)
+        broadcast_addr = int(network.broadcast_address)
+        
+        # 确保不生成网络地址和广播地址
+        if network.prefixlen <= 30:  # /30及更大的网络有主机地址
+            first_ip = network_addr + 1
+            last_ip = broadcast_addr - 1
+        else:
+            # /31 和 /32 网络特殊处理
+            first_ip = network_addr
+            last_ip = broadcast_addr
+        
+        if first_ip <= last_ip:
+            random_ip_int = random.randint(first_ip, last_ip)
+            return str(ipaddress.IPv4Address(random_ip_int))
+        else:
+            return str(network.network_address)
+            
+    except Exception as e:
+        # 备用生成方法
+        base_ip = subnet.split('/')[0]
+        parts = base_ip.split('.')
+        while len(parts) < 4:
+            parts.append(str(random.randint(0, 255)))
+        parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
+        return ".".join(parts)
+
+def generate_ips_from_subnet_optimized(subnet, max_ips, comment):
+    """
+    优化的IP段生成函数 - 避免性能问题
+    """
+    generated_ips = {}
+    
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+        available_ips = []
+        
+        # 对于小网络，预生成可用IP列表
+        if network.num_addresses <= 256:  # /24及更小的网络
+            available_ips = [str(ip) for ip in network.hosts()]
+        else:
+            # 对于大网络，使用集合来避免重复
+            available_ips_set = set()
+        
+        attempts = 0
+        while len(generated_ips) < max_ips and attempts < CONFIG["MAX_GENERATION_ATTEMPTS"]:
+            if available_ips:
+                # 从预生成的IP中随机选择
+                ip = random.choice(available_ips)
+                available_ips.remove(ip)
+            else:
+                # 随机生成IP
+                ip = generate_random_ip_fast(subnet)
+                
+                # 检查是否重复
+                if ip in generated_ips:
+                    attempts += 1
+                    continue
+            
+            generated_ips[ip] = {
+                "type": "ip",
+                "comment": comment,
+                "source": "custom",
+                "domain": f"网段:{subnet}"
+            }
+            attempts += 1
+            
+    except Exception as e:
+        print(f"⚠️ 生成IP段 {subnet} 时出错: {e}")
+    
+    return generated_ips
 
 ####################################################
 # IP地理位置查询函数
@@ -409,7 +506,7 @@ def speed_test(target, is_domain=False):
         return 0.0
 
 ####################################################
-# 核心功能函数 - 修改支持域名测试
+# 核心功能函数 - 修改支持域名测试并优化性能
 ####################################################
 
 def init_env():
@@ -479,7 +576,7 @@ def parse_custom_ips_file():
 
 def generate_ip_pool():
     """
-    根据配置的IP池来源生成测试目标池，支持域名直接测试
+    根据配置的IP池来源生成测试目标池，支持域名直接测试 - 优化性能版本
     """
     sources_config = CONFIG["IP_POOL_SOURCES"]
     sources = [s.strip() for s in sources_config.split(',')]
@@ -512,46 +609,68 @@ def generate_ip_pool():
         
         print(f"✅ 来源1 - 自定义域名和IP: {len(domains_with_comments)}个域名, {len(individual_ips_with_comments)}个IP")
     
-    # 2. 自定义IP段
+    # 2. 自定义IP段 - 优化版本，避免性能问题
     if '2' in sources:
         _, _, custom_subnets_with_comments = parse_custom_ips_file()
-        custom_ip_count = CONFIG["IP_POOL_SIZE"] // 3
+        custom_ip_count = min(CONFIG["IP_POOL_SIZE"] // 3, 2000)  # 限制最大数量
         
         custom_ip_pool = {}
         if custom_subnets_with_comments:
             print(f"🔧 从 {len(custom_subnets_with_comments)} 个自定义IP段生成IP...")
-            with tqdm(total=min(custom_ip_count, len(custom_subnets_with_comments) * 10), 
-                     desc="生成自定义IP段", unit="IP") as pbar:
-                while len(custom_ip_pool) < custom_ip_count and custom_subnets_with_comments:
-                    subnet = random.choice(list(custom_subnets_with_comments.keys()))
-                    comment = custom_subnets_with_comments[subnet]
-                    ip = generate_random_ip(subnet)
-                    if ip not in custom_ip_pool:
-                        custom_ip_pool[ip] = {
-                            "type": "ip",
-                            "comment": comment,
-                            "source": "custom",
-                            "domain": f"网段:{subnet}"
-                        }
-                        pbar.update(1)
+            
+            # 计算每个IP段应该生成多少IP
+            ips_per_subnet = min(CONFIG["MAX_IPS_PER_SUBNET"], 
+                               max(1, custom_ip_count // len(custom_subnets_with_comments)))
+            
+            total_generated = 0
+            pbar = tqdm(total=min(custom_ip_count, len(custom_subnets_with_comments) * ips_per_subnet), 
+                       desc="生成自定义IP段", unit="IP")
+            
+            for subnet, comment in custom_subnets_with_comments.items():
+                if total_generated >= custom_ip_count:
+                    break
+                    
+                # 为每个IP段生成IP
+                current_batch_size = min(ips_per_subnet, custom_ip_count - total_generated)
+                subnet_ips = generate_ips_from_subnet_optimized(subnet, current_batch_size, comment)
+                
+                # 更新进度条
+                new_ips_count = len(subnet_ips)
+                if new_ips_count > 0:
+                    pbar.update(new_ips_count)
+                
+                custom_ip_pool.update(subnet_ips)
+                total_generated += new_ips_count
+            
+            pbar.close()
         
         total_test_pool.update(custom_ip_pool)
         print(f"✅ 来源2 - 自定义IP段: {len(custom_ip_pool)} 个IP")
     
-    # 3. 官方IP池
+    # 3. 官方IP池 - 优化版本
     if '3' in sources:
         cf_subnets = fetch_ip_ranges()
         if not cf_subnets:
             print("❌ 无法获取Cloudflare IP段")
         else:
-            cf_ip_count = CONFIG["IP_POOL_SIZE"] // 2
+            cf_ip_count = min(CONFIG["IP_POOL_SIZE"] // 2, 3000)  # 限制数量
             
             cf_ip_pool = {}
             print(f"🔧 从 {len(cf_subnets)} 个Cloudflare IP段生成IP...")
-            with tqdm(total=cf_ip_count, desc="生成官方IP", unit="IP") as pbar:
-                while len(cf_ip_pool) < cf_ip_count:
-                    subnet = random.choice(cf_subnets)
-                    ip = generate_random_ip(subnet)
+            
+            # 限制生成的IP数量
+            max_ips_per_subnet = max(1, cf_ip_count // len(cf_subnets))
+            
+            pbar = tqdm(total=cf_ip_count, desc="生成官方IP", unit="IP")
+            generated_count = 0
+            
+            while generated_count < cf_ip_count:
+                subnet = random.choice(cf_subnets)
+                
+                # 为每个IP段生成少量IP
+                batch_size = min(5, max_ips_per_subnet, cf_ip_count - generated_count)
+                for _ in range(batch_size):
+                    ip = generate_random_ip_fast(subnet)
                     if ip not in cf_ip_pool and ip not in total_test_pool:
                         cf_ip_pool[ip] = {
                             "type": "ip",
@@ -559,7 +678,13 @@ def generate_ip_pool():
                             "source": "cloudflare",
                             "domain": f"CF网段:{subnet}"
                         }
+                        generated_count += 1
                         pbar.update(1)
+                        
+                        if generated_count >= cf_ip_count:
+                            break
+            
+            pbar.close()
             
             total_test_pool.update(cf_ip_pool)
             print(f"✅ 来源3 - 官方IP池: {len(cf_ip_pool)} 个IP")
@@ -575,7 +700,10 @@ def generate_ip_pool():
     full_test_pool = list(total_test_pool.keys())
     random.shuffle(full_test_pool)
     
-    print(f"✅ 测试目标池生成完成: 总计 {len(full_test_pool)} 个目标 ({sum(1 for x in total_test_pool.values() if x['type'] == 'domain')}个域名, {sum(1 for x in total_test_pool.values() if x['type'] == 'ip')}个IP)")
+    domain_count = sum(1 for x in total_test_pool.values() if x['type'] == 'domain')
+    ip_count = sum(1 for x in total_test_pool.values() if x['type'] == 'ip')
+    
+    print(f"✅ 测试目标池生成完成: 总计 {len(full_test_pool)} 个目标 ({domain_count}个域名, {ip_count}个IP)")
     
     # 抽样测试目标
     test_count = min(CONFIG["TEST_IP_COUNT"], len(full_test_pool))
@@ -584,33 +712,52 @@ def generate_ip_pool():
     
     return test_pool, total_test_pool
 
-def generate_random_ip(subnet):
-    """根据CIDR生成子网内的随机合法IP"""
-    try:
-        network = ipaddress.ip_network(subnet, strict=False)
-        network_addr = int(network.network_address)
-        broadcast_addr = int(network.broadcast_address)
-        first_ip = network_addr + 1
-        last_ip = broadcast_addr - 1
-        random_ip_int = random.randint(first_ip, last_ip)
-        return str(ipaddress.IPv4Address(random_ip_int))
-    except Exception as e:
-        base_ip = subnet.split('/')[0]
-        parts = base_ip.split('.')
-        while len(parts) < 4:
-            parts.append(str(random.randint(0, 255)))
-        parts = [str(min(255, max(0, int(p)))) for p in parts[:3]] + [str(random.randint(1, 254))]
-        return ".".join(parts)
-
 def fetch_ip_ranges():
     """获取Cloudflare官方IP段"""
     url = CONFIG["CLOUDFLARE_IPS_URL"]
     try:
         res = requests.get(url, timeout=10, verify=False)
-        return res.text.splitlines()
+        if res.status_code == 200:
+            return [line.strip() for line in res.text.splitlines() if line.strip()]
+        else:
+            print(f"⚠️ 获取Cloudflare IP段失败，状态码: {res.status_code}")
+            # 返回备用IP段
+            return [
+                "173.245.48.0/20",
+                "103.21.244.0/22", 
+                "103.22.200.0/22",
+                "103.31.4.0/22",
+                "141.101.64.0/18",
+                "108.162.192.0/18",
+                "190.93.240.0/20",
+                "188.114.96.0/20",
+                "197.234.240.0/22",
+                "198.41.128.0/17",
+                "162.158.0.0/15",
+                "104.16.0.0/13",
+                "104.24.0.0/14",
+                "172.64.0.0/13",
+                "131.0.72.0/22"
+            ]
     except Exception as e:
         print(f"🚨 获取Cloudflare IP段失败: {e}")
-    return []
+        return [
+            "173.245.48.0/20",
+            "103.21.244.0/22", 
+            "103.22.200.0/22",
+            "103.31.4.0/22",
+            "141.101.64.0/18",
+            "108.162.192.0/18",
+            "190.93.240.0/20",
+            "188.114.96.0/20",
+            "197.234.240.0/22",
+            "198.41.128.0/17",
+            "162.158.0.0/15",
+            "104.16.0.0/13",
+            "104.24.0.0/14",
+            "172.64.0.0/13",
+            "131.0.72.0/22"
+        ]
 
 def ping_test(target):
     """延迟测试入口 - 支持域名和IP测试"""
@@ -776,7 +923,7 @@ def format_target_list_for_file(target_list, port=None):
     return formatted_lines
 
 ####################################################
-# 主逻辑 - 修改支持域名测试
+# 主逻辑 - 修改支持域名测试并优化性能
 ####################################################
 if __name__ == "__main__":
     # 0. 初始化环境
@@ -784,7 +931,7 @@ if __name__ == "__main__":
     
     # 1. 打印配置参数
     print("="*60)
-    print(f"{'Cloudflare IP/域名优选工具':^60}")
+    print(f"{'Cloudflare IP/域名优选工具 - 优化版':^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
     print(f"输出格式: 目标:端口#[注释] 国家简称")
@@ -841,9 +988,11 @@ if __name__ == "__main__":
         ) as pbar:
             for future in as_completed(future_to_target):
                 try:
-                    ping_results.append(future.result())
+                    result = future.result(timeout=30)  # 添加超时避免卡死
+                    ping_results.append(result)
                 except Exception as e:
-                    print(f"\n🔧 延迟测试异常: {e}")
+                    # 忽略单个目标的错误
+                    pass
                 finally:
                     pbar.update(1)
     
@@ -866,7 +1015,7 @@ if __name__ == "__main__":
         exit(1)
     
     full_results = []
-    with ThreadPoolExecutor(max_workers=CONFIG["THREADS"]) as executor:
+    with ThreadPoolExecutor(max_workers=min(CONFIG["THREADS"], 50)) as executor:  # 测速使用更少线程
         future_to_target = {executor.submit(full_test, target_data): target_data for target_data in passed_targets}
         with tqdm(
             total=len(passed_targets),
@@ -876,9 +1025,11 @@ if __name__ == "__main__":
         ) as pbar:
             for future in as_completed(future_to_target):
                 try:
-                    full_results.append(future.result())
+                    result = future.result(timeout=60)  # 测速超时更长
+                    full_results.append(result)
                 except Exception as e:
-                    print(f"\n🔧 测速异常: {e}")
+                    # 忽略测速失败的目标
+                    pass
                 finally:
                     pbar.update(1)
 
@@ -1016,5 +1167,5 @@ if __name__ == "__main__":
     print("📊 文件说明:")
     print("   - top_targets.txt: 精选目标列表 (目标:端口#[注释] 国家简称)")
     print("   - top_targets_details.csv: 详细性能数据")
-    print("🗑️  结果已按延迟升序排列")
+    print("❣️  结果已按延迟升序排列")
     print("="*60)
