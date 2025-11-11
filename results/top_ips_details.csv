@@ -1,9 +1,0 @@
-IP,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,来源
-104.18.63.159,15.78,0.00,122.34,US,Cloudflare,custom
-104.18.58.51,16.41,0.00,209.48,US,Cloudflare,custom
-104.18.49.197,17.72,0.00,132.68,US,Cloudflare,custom
-104.18.50.38,18.33,0.00,111.95,US,Cloudflare,custom
-104.18.59.1,21.07,0.00,110.21,US,Cloudflare,custom
-104.18.48.116,30.57,0.00,159.99,US,Cloudflare,custom
-104.18.62.95,33.29,0.00,161.26,US,Cloudflare,custom
-104.18.48.242,37.53,0.00,118.72,US,Cloudflare,custom
