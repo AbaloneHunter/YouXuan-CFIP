@@ -41,7 +41,7 @@ CONFIG = {
     # 新增配置：地理位置查询设置
     "GEO_QUERY_ENABLED": True,  # 是否启用地理位置查询
     "GEO_QUERY_MODE": "DELAY_FIRST",  # 查询模式：DELAY_FIRST=延迟优先, SPEED_FIRST=速度优先, BOTH=两者都查
-    "GEO_QUERY_COUNT": 50,  # 查询前多少个IP的地理位置
+    "GEO_QUERY_COUNT": 200,  # 查询前多少个IP的地理位置
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
