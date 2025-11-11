@@ -30,7 +30,7 @@ CONFIG = {
     "THREADS": 500,  # 并发线程数
     "IP_POOL_SIZE": 100000,  # IP池总大小
     "TEST_IP_COUNT": 2000,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 200,  # 精选IP数量（增加到200用于地理位置测试）
+    "TOP_IPS_LIMIT": 100,  # 精选IP数量（增加到200用于地理位置测试）
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
@@ -60,6 +60,62 @@ CONFIG = {
         'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
         'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
         'UN': '🏴'  # 未知国家
+    },
+    
+    # 国家代码到中文名称的映射（特殊格式）
+    "COUNTRY_NAMES": {
+        'CN': '中·国',
+        'TW': '台·湾',
+        'US': '美国',
+        'SG': '新加坡',
+        'JP': '日本',
+        'HK': '香港',
+        'KR': '韩国',
+        'DE': '德国',
+        'GB': '英国',
+        'FR': '法国',
+        'CA': '加拿大',
+        'AU': '澳大利亚',
+        'NL': '荷兰',
+        'SE': '瑞典',
+        'FI': '芬兰',
+        'NO': '挪威',
+        'DK': '丹麦',
+        'CH': '瑞士',
+        'IT': '意大利',
+        'ES': '西班牙',
+        'PT': '葡萄牙',
+        'BE': '比利时',
+        'AT': '奥地利',
+        'IE': '爱尔兰',
+        'PL': '波兰',
+        'CZ': '捷克',
+        'HU': '匈牙利',
+        'RO': '罗马尼亚',
+        'BG': '保加利亚',
+        'GR': '希腊',
+        'TR': '土耳其',
+        'RU': '俄罗斯',
+        'UA': '乌克兰',
+        'IL': '以色列',
+        'AE': '阿联酋',
+        'SA': '沙特',
+        'IN': '印度',
+        'TH': '泰国',
+        'MY': '马来西亚',
+        'ID': '印度尼西亚',
+        'VN': '越南',
+        'PH': '菲律宾',
+        'BR': '巴西',
+        'MX': '墨西哥',
+        'AR': '阿根廷',
+        'CL': '智利',
+        'CO': '哥伦比亚',
+        'ZA': '南非',
+        'EG': '埃及',
+        'NG': '尼日利亚',
+        'KE': '肯尼亚',
+        'UN': '未知'
     },
     
     # IP地理位置API配置
@@ -594,24 +650,32 @@ def enhance_target_with_country_info(target_list):
     return enhanced_targets
 
 ####################################################
-# 格式化输出函数 - 优化输出格式
+# 格式化输出函数 - 优化输出格式，添加国家名称
 ####################################################
+
+def get_country_display_name(country_code):
+    """
+    获取国家显示名称，包含特殊格式
+    """
+    country_name = CONFIG["COUNTRY_NAMES"].get(country_code, country_code)
+    return f"{country_name}·{country_code}"
 
 def format_target_output(target_data, port=None):
     """
-    输出 目标:端口#国旗 国家简称 注释 格式
+    输出 目标:端口#国旗 国家名称·国家代码 注释 格式
     """
     if port is None:
         port = CONFIG["PORT"]
     
     country_code = target_data.get('countryCode', 'UN')
     flag = CONFIG["COUNTRY_FLAGS"].get(country_code, '🏴')
+    country_display = get_country_display_name(country_code)
     
     # 添加注释
     comment = target_data.get('comment', '')
     comment_str = f" {comment}" if comment else ''
     
-    return f"{target_data['target']}:{port}#{flag} {country_code}{comment_str}"
+    return f"{target_data['target']}:{port}#{flag} {country_display}{comment_str}"
 
 def format_target_list_for_display(target_list, port=None):
     """
@@ -651,7 +715,7 @@ if __name__ == "__main__":
     print(f"{'Cloudflare IP优选工具':^60}")
     print("="*60)
     print(f"测试模式: {CONFIG['MODE']}")
-    print(f"输出格式: 目标:端口#国旗 国家简称 注释")
+    print(f"输出格式: 目标:端口#国旗 国家名称·国家代码 注释")
     print(f"目标池来源: {CONFIG['IP_POOL_SOURCES']}")
     print(f"地理位置API: 仅对前{CONFIG['GEO_TEST_LIMIT']}个IP目标启用")
     
@@ -758,9 +822,10 @@ if __name__ == "__main__":
         f.write("\n".join([target[0] for target in passed_targets]))
     
     with open('results/full_results.csv', 'w') as f:
-        f.write("目标,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,注释\n")
+        f.write("目标,延迟(ms),丢包率(%),速度(Mbps),国家代码,国家名称,ISP,注释\n")
         for target_data in enhanced_results:
-            f.write(f"{target_data['target']},{target_data['rtt']:.2f},{target_data['loss']:.2f},{target_data['speed']:.2f},{target_data['countryCode']},{target_data['isp']},{target_data.get('comment', '')}\n")
+            country_display = get_country_display_name(target_data['countryCode'])
+            f.write(f"{target_data['target']},{target_data['rtt']:.2f},{target_data['loss']:.2f},{target_data['speed']:.2f},{target_data['countryCode']},{country_display},{target_data['isp']},{target_data.get('comment', '')}\n")
     
     # 所有输出文件都使用统一格式
     with open('results/top_targets.txt', 'w', encoding='utf-8') as f:
@@ -768,9 +833,10 @@ if __name__ == "__main__":
         f.write("\n".join(formatted_lines))
     
     with open('results/top_targets_details.csv', 'w', encoding='utf-8') as f:
-        f.write("目标,延迟(ms),丢包率(%),速度(Mbps),国家代码,ISP,注释\n")
+        f.write("目标,延迟(ms),丢包率(%),速度(Mbps),国家代码,国家名称,ISP,注释\n")
         for target_data in sorted_targets:
-            f.write(f"{target_data['target']},{target_data['rtt']:.2f},{target_data['loss']:.2f},{target_data['speed']:.2f},{target_data['countryCode']},{target_data['isp']},{target_data.get('comment', '')}\n")
+            country_display = get_country_display_name(target_data['countryCode'])
+            f.write(f"{target_data['target']},{target_data['rtt']:.2f},{target_data['loss']:.2f},{target_data['speed']:.2f},{target_data['countryCode']},{country_display},{target_data['isp']},{target_data.get('comment', '')}\n")
 
     # 8. 显示统计结果
     print("\n" + "="*60)
@@ -799,7 +865,7 @@ if __name__ == "__main__":
     print("="*60)
     print("✅ 结果已保存至 results/ 目录")
     print("📊 文件说明:")
-    print("   - top_targets.txt: 精选目标列表 (目标:端口#国旗 国家简称 注释)")
+    print("   - top_targets.txt: 精选目标列表 (目标:端口#国旗 国家名称·国家代码 注释)")
     print("   - top_targets_details.csv: 详细性能数据")
     print("❣️  结果已按延迟升序排列")
     print("="*60)
