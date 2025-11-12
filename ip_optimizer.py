@@ -22,7 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ####################################################
 CONFIG = {
     "VERSION": "1.0",  # 版本号
-    "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
+    "MODE": "TCP",  # 测试模式：TCP/URL_TEST
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
@@ -50,8 +50,8 @@ CONFIG = {
     
     # 国家代码到国旗的映射
     "COUNTRY_FLAGS": {
-        'CN': '❤️', 'TW': '🌀',
-        'US': '🇺🇸', 'SG': '🇸🇬', 'JP': '🇯🇵', 'HK': '🇭🇰', 'KR': '🇰🇷',
+        'CN': '❣️', 'TW': '❣️',
+        'US': '🇺🇸', 'SG': '🇸🇬', 'JP': '🇯🇵', 'HK': '❣️', 'KR': '🇰🇷',
         'DE': '🇩🇪', 'GB': '🇬🇧', 'FR': '🇫🇷', 'CA': '🇨🇦', 'AU': '🇦🇺',
         'NL': '🇳🇱', 'SE': '🇸🇪', 'FI': '🇫🇮', 'NO': '🇳🇴', 'DK': '🇩🇰',
         'CH': '🇨🇭', 'IT': '🇮🇹', 'ES': '🇪🇸', 'PT': '🇵🇹', 'BE': '🇧🇪',
@@ -71,7 +71,7 @@ CONFIG = {
         'US': '美国',
         'SG': '新加坡',
         'JP': '日本',
-        'HK': '香港',
+        'HK': '香·港',
         'KR': '韩国',
         'DE': '德国',
         'GB': '英国',
