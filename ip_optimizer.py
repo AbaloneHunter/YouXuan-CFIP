@@ -38,7 +38,7 @@ CONFIG = {
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "1,2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
+    "IP_POOL_SOURCES": "1",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
     "GEO_TEST_LIMIT": 200,  # 地理位置测试数量限制
     
     # 备用测试URL列表
@@ -51,7 +51,7 @@ CONFIG = {
     # 国家代码到国旗的映射
     "COUNTRY_FLAGS": {
         'CN': '❣️', 'TW': '❣️',
-        'US': '🇺🇸', 'SG': '🇸🇬', 'JP': '🇯🇵', 'HK': '❣️', 'KR': '🇰🇷',
+        'US': '🇺🇸', 'SG': '🇸🇬', 'JP': '🇯🇵', 'HK': '🇭🇰', 'KR': '🇰🇷',
         'DE': '🇩🇪', 'GB': '🇬🇧', 'FR': '🇫🇷', 'CA': '🇨🇦', 'AU': '🇦🇺',
         'NL': '🇳🇱', 'SE': '🇸🇪', 'FI': '🇫🇮', 'NO': '🇳🇴', 'DK': '🇩🇰',
         'CH': '🇨🇭', 'IT': '🇮🇹', 'ES': '🇪🇸', 'PT': '🇵🇹', 'BE': '🇧🇪',
@@ -71,7 +71,7 @@ CONFIG = {
         'US': '美国',
         'SG': '新加坡',
         'JP': '日本',
-        'HK': '香·港',
+        'HK': '香港',
         'KR': '韩国',
         'DE': '德国',
         'GB': '英国',
