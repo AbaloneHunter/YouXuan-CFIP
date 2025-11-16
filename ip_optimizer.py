@@ -26,7 +26,7 @@ CONFIG = {
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
-    "PORT": 8443,  # TCP测试端口
+    "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
@@ -38,7 +38,7 @@ CONFIG = {
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
+    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -676,11 +676,14 @@ def enhance_target_with_country_info(target_list):
     
     print(f"正在处理目标地理位置信息...")
     
+    # 首先按延迟排序，确保我们处理的是性能最好的目标
+    target_list_sorted = sorted(target_list, key=lambda x: x[1])
+    
     # 首先处理所有自定义目标（已经有地理信息的）
     custom_targets = []
     other_targets = []
     
-    for target_data in target_list:
+    for target_data in target_list_sorted:
         target = target_data[0]
         # 检查是否为已格式化目标（已经有地理信息）
         if target in preformatted_targets:
@@ -690,7 +693,7 @@ def enhance_target_with_country_info(target_list):
     
     print(f"分类完成: 自定义目标 {len(custom_targets)} 个, 其他目标 {len(other_targets)} 个")
     
-    # 先添加所有自定义目标
+    # 先添加所有自定义目标（按延迟排序）
     for target_data in custom_targets:
         target = target_data[0]
         rtt = target_data[1]
@@ -712,9 +715,12 @@ def enhance_target_with_country_info(target_list):
         enhanced_targets.append(enhanced_target)
     
     # 然后对其他目标进行地理位置查询，确保前TOP_IPS_LIMIT个都有地理信息
-    query_count = CONFIG["TOP_IPS_LIMIT"] - len(custom_targets)
-    if query_count > 0:
-        targets_to_query = other_targets[:query_count]
+    # 计算还需要多少个目标来达到TOP_IPS_LIMIT
+    needed_count = CONFIG["TOP_IPS_LIMIT"] - len(enhanced_targets)
+    
+    if needed_count > 0 and other_targets:
+        # 取性能最好的其他目标进行查询
+        targets_to_query = other_targets[:needed_count]
     else:
         targets_to_query = []
     
@@ -752,7 +758,7 @@ def enhance_target_with_country_info(target_list):
             pbar.update(1)
     
     # 添加剩余的目标（不进行地理位置查询）
-    remaining_targets = other_targets[query_count:] if query_count > 0 else other_targets
+    remaining_targets = other_targets[needed_count:] if needed_count > 0 else other_targets
     for target_data in remaining_targets:
         target = target_data[0]
         rtt = target_data[1]
