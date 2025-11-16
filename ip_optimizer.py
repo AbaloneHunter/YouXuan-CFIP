@@ -26,11 +26,11 @@ CONFIG = {
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
-    "PORT": 8443,  # TCP测试端口
+    "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 500,  # 并发线程数
-    "IP_POOL_SIZE": 50000,  # IP池总大小
+    "THREADS": 300,  # 并发线程数
+    "IP_POOL_SIZE": 20000,  # IP池总大小
     "TEST_IP_COUNT": 5000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
@@ -39,7 +39,6 @@ CONFIG = {
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
     "IP_POOL_SOURCES": "2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
-    "GEO_TEST_LIMIT": 200,  # 地理位置测试数量限制
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -672,7 +671,7 @@ def full_test(target_data):
     return (*target_data, speed)
 
 def enhance_target_with_country_info(target_list):
-    """为目标列表添加国家代码信息"""
+    """为目标列表添加国家代码信息 - 只对TOP目标进行地理位置查询"""
     enhanced_targets = []
     
     print(f"正在处理目标地理位置信息...")
@@ -688,20 +687,19 @@ def enhance_target_with_country_info(target_list):
                 country_code = preformatted_targets[target]['countryCode']
                 comment = preformatted_targets[target]['comment']
             else:
-                # 只有未格式化的IP地址才进行地理位置查询
+                # 对于非格式化目标，只在TOP_IPS_LIMIT范围内进行地理位置查询
                 country_code = 'UN'
                 comment = custom_ip_comments.get(target, '')
                 
-                # 提取纯IP地址进行查询
-                try:
-                    host = target.split(':')[0]
-                    ipaddress.ip_address(host)
-                    # 只对前GEO_TEST_LIMIT个目标进行真实地理位置查询
-                    if len(enhanced_targets) < CONFIG["GEO_TEST_LIMIT"]:
+                # 只对前TOP_IPS_LIMIT个目标进行真实地理位置查询
+                if len(enhanced_targets) < CONFIG["TOP_IPS_LIMIT"]:
+                    try:
+                        host = target.split(':')[0]
+                        ipaddress.ip_address(host)  # 验证是否为IP地址
                         country_code = get_real_ip_country_code(host)
-                except ValueError:
-                    # 域名不进行地理位置查询
-                    pass
+                    except ValueError:
+                        # 域名不进行地理位置查询
+                        pass
             
             enhanced_target = {
                 'target': target,
@@ -848,8 +846,40 @@ if __name__ == "__main__":
                     pbar.update(1)
 
     full_results.sort(key=lambda x: x[1])
-    enhanced_results = enhance_target_with_country_info(full_results)
-    sorted_targets = sorted(enhanced_results, key=lambda x: x['rtt'])[:CONFIG["TOP_IPS_LIMIT"]]
+    
+    # 先选择TOP目标，再进行地理位置查询
+    top_targets = full_results[:CONFIG["TOP_IPS_LIMIT"]]
+    enhanced_results = enhance_target_with_country_info(top_targets)
+    
+    # 对于其他目标，只保留自定义的地理信息
+    other_targets = full_results[CONFIG["TOP_IPS_LIMIT"]:]
+    for target_data in other_targets:
+        target = target_data[0]
+        rtt = target_data[1]
+        loss = target_data[2]
+        speed = target_data[3] if len(target_data) > 3 else 0
+        
+        # 检查是否为已格式化目标
+        if target in preformatted_targets:
+            country_code = preformatted_targets[target]['countryCode']
+            comment = preformatted_targets[target]['comment']
+        else:
+            # 非TOP目标且非自定义目标，设为未知
+            country_code = 'UN'
+            comment = custom_ip_comments.get(target, '')
+        
+        enhanced_target = {
+            'target': target,
+            'rtt': rtt,
+            'loss': loss,
+            'speed': speed,
+            'countryCode': country_code,
+            'isp': "Cloudflare",
+            'comment': comment
+        }
+        enhanced_results.append(enhanced_target)
+    
+    sorted_targets = sorted(enhanced_results, key=lambda x: x['rtt'])
 
     os.makedirs('results', exist_ok=True)
     
@@ -869,6 +899,7 @@ if __name__ == "__main__":
     print(f"实际测试目标数: {len(ping_results)}")
     print(f"通过延迟测试目标数: {len(passed_targets)}")
     print(f"精选TOP目标: {len(sorted_targets)}")
+    print(f"地理位置查询: 仅对前{CONFIG['TOP_IPS_LIMIT']}个目标进行查询")
     
     if sorted_targets:
         print(f"【最佳目标 TOP10】(按延迟升序排列)")
