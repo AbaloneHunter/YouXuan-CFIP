@@ -26,7 +26,7 @@ CONFIG = {
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
-    "PORT": 443,  # TCP测试端口
+    "PORT": 8443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
@@ -546,10 +546,11 @@ def generate_ip_pool():
     total_target_pool = set()
     target_pool_size = CONFIG["IP_POOL_SIZE"]
     
+    # 预先解析自定义IP文件，确保变量在所有分支中都可用
+    domains, individual_ips, custom_subnets, preformatted = parse_custom_ips_file()
+    
     # 1. 自定义域名和IP
     if '1' in sources:
-        domains, individual_ips, custom_subnets, preformatted = parse_custom_ips_file()
-        
         # 收集来源1的所有目标
         source1_targets = set()
         source1_targets.update(domains)
