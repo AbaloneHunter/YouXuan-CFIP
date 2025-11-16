@@ -229,21 +229,33 @@ def parse_simple_target(line):
 # IP地理位置查询函数
 ####################################################
 
-def get_real_ip_country_code(ip):
-    """使用真实的地理位置API检测IP国家代码"""
+def get_real_ip_country_code(host):
+    """使用真实的地理位置API检测主机国家代码，支持域名和IP"""
     # 检查缓存
-    if CONFIG["IP_GEO_API"]["enable_cache"] and ip in ip_geo_cache:
-        return ip_geo_cache[ip]
+    if CONFIG["IP_GEO_API"]["enable_cache"] and host in ip_geo_cache:
+        return ip_geo_cache[host]
+    
+    # 如果是域名，先尝试解析为IP
+    try:
+        ipaddress.ip_address(host)  # 如果是IP地址，直接使用
+        ip_to_query = host
+    except ValueError:
+        # 如果是域名，尝试解析
+        try:
+            ip_to_query = socket.gethostbyname(host)
+        except Exception as e:
+            # 域名解析失败，返回未知
+            return 'UN'
     
     apis = [
         {
-            'url': f'http://ip-api.com/json/{ip}?fields=status,message,countryCode',
+            'url': f'http://ip-api.com/json/{ip_to_query}?fields=status,message,countryCode',
             'field': 'countryCode',
             'check_field': 'status',
             'check_value': 'success'
         },
         {
-            'url': f'https://ipapi.co/{ip}/json/',
+            'url': f'https://ipapi.co/{ip_to_query}/json/',
             'field': 'country_code',
             'check_field': 'country_code',
             'check_value': None
@@ -267,7 +279,7 @@ def get_real_ip_country_code(ip):
                 if country_code:
                     # 缓存结果
                     if CONFIG["IP_GEO_API"]["enable_cache"]:
-                        ip_geo_cache[ip] = country_code
+                        ip_geo_cache[host] = country_code
                     
                     return country_code
         except Exception:
@@ -679,6 +691,15 @@ def enhance_target_with_country_info(target_list):
     # 首先按延迟排序，确保我们处理的是性能最好的目标
     target_list_sorted = sorted(target_list, key=lambda x: x[1])
     
+    # 统计自定义目标在前200个中的数量
+    custom_in_top200 = 0
+    for target_data in target_list_sorted[:200]:
+        target = target_data[0]
+        if target in preformatted_targets:
+            custom_in_top200 += 1
+    
+    print(f"前200个目标中自定义目标数量: {custom_in_top200}")
+    
     # 只对前200个目标进行地理位置查询
     geo_query_limit = 200
     targets_for_geo_query = target_list_sorted[:geo_query_limit]
@@ -687,6 +708,12 @@ def enhance_target_with_country_info(target_list):
     print(f"将对前 {len(targets_for_geo_query)} 个目标进行地理位置查询")
     
     # 处理前200个目标
+    api_success_count = 0
+    api_fail_count = 0
+    custom_count = 0
+    domain_count = 0
+    ip_count = 0
+    
     with tqdm(total=len(targets_for_geo_query), desc="查询地理位置", unit="目标") as pbar:
         for target_data in targets_for_geo_query:
             target = target_data[0]
@@ -698,17 +725,35 @@ def enhance_target_with_country_info(target_list):
             if target in preformatted_targets:
                 country_code = preformatted_targets[target]['countryCode']
                 comment = preformatted_targets[target]['comment']
+                custom_count += 1
             else:
                 country_code = 'UN'
                 comment = custom_ip_comments.get(target, '')
                 
-                # 对非自定义目标进行地理位置查询
+                # 对非自定义目标进行地理位置查询（包括域名和IP）
                 try:
                     host = target.split(':')[0]
-                    ipaddress.ip_address(host)  # 验证是否为IP地址
+                    
+                    # 统计IP和域名数量
+                    try:
+                        ipaddress.ip_address(host)  # 验证是否为IP地址
+                        is_ip = True
+                        ip_count += 1
+                    except ValueError:
+                        is_ip = False
+                        domain_count += 1
+                    
+                    # 无论是IP还是域名，都进行地理位置查询
+                    original_country_code = country_code
                     country_code = get_real_ip_country_code(host)
-                except ValueError:
-                    # 域名不进行地理位置查询
+                    if country_code != 'UN' and country_code != original_country_code:
+                        api_success_count += 1
+                    else:
+                        api_fail_count += 1
+                        
+                except Exception as e:
+                    # 地理位置查询失败
+                    api_fail_count += 1
                     pass
             
             enhanced_target = {
@@ -724,6 +769,7 @@ def enhance_target_with_country_info(target_list):
             pbar.update(1)
     
     # 处理剩余的目标（不进行地理位置查询）
+    remaining_custom_count = 0
     for target_data in remaining_targets:
         target = target_data[0]
         rtt = target_data[1]
@@ -734,6 +780,7 @@ def enhance_target_with_country_info(target_list):
         if target in preformatted_targets:
             country_code = preformatted_targets[target]['countryCode']
             comment = preformatted_targets[target]['comment']
+            remaining_custom_count += 1
         else:
             # 非前200个目标且非自定义目标，设为未知
             country_code = 'UN'
@@ -750,7 +797,14 @@ def enhance_target_with_country_info(target_list):
         }
         enhanced_targets.append(enhanced_target)
     
-    print(f"地理位置查询完成: 前{geo_query_limit}个目标已查询, 剩余{len(remaining_targets)}个目标设为未知")
+    print(f"\n地理位置查询详细统计:")
+    print(f"  自定义目标: {custom_count} 个")
+    print(f"  IP地址目标: {ip_count} 个")
+    print(f"  域名目标: {domain_count} 个")
+    print(f"  API查询成功: {api_success_count} 个")
+    print(f"  API查询失败: {api_fail_count} 个")
+    print(f"  剩余自定义目标: {remaining_custom_count} 个")
+    print(f"  前200个目标中地理信息总数: {custom_count + api_success_count}")
     
     return enhanced_targets
 
