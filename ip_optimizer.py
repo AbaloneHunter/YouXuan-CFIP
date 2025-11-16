@@ -671,35 +671,73 @@ def full_test(target_data):
     return (*target_data, speed)
 
 def enhance_target_with_country_info(target_list):
-    """为目标列表添加国家代码信息 - 只对TOP目标进行地理位置查询"""
+    """为目标列表添加国家代码信息 - 确保TOP目标都有地理位置信息"""
     enhanced_targets = []
     
     print(f"正在处理目标地理位置信息...")
-    with tqdm(total=len(target_list), desc="目标地理位置", unit="目标") as pbar:
-        for target_data in target_list:
+    
+    # 首先处理所有自定义目标（已经有地理信息的）
+    custom_targets = []
+    other_targets = []
+    
+    for target_data in target_list:
+        target = target_data[0]
+        # 检查是否为已格式化目标（已经有地理信息）
+        if target in preformatted_targets:
+            custom_targets.append(target_data)
+        else:
+            other_targets.append(target_data)
+    
+    print(f"分类完成: 自定义目标 {len(custom_targets)} 个, 其他目标 {len(other_targets)} 个")
+    
+    # 先添加所有自定义目标
+    for target_data in custom_targets:
+        target = target_data[0]
+        rtt = target_data[1]
+        loss = target_data[2]
+        speed = target_data[3] if len(target_data) > 3 else 0
+        
+        country_code = preformatted_targets[target]['countryCode']
+        comment = preformatted_targets[target]['comment']
+        
+        enhanced_target = {
+            'target': target,
+            'rtt': rtt,
+            'loss': loss,
+            'speed': speed,
+            'countryCode': country_code,
+            'isp': "Cloudflare",
+            'comment': comment
+        }
+        enhanced_targets.append(enhanced_target)
+    
+    # 然后对其他目标进行地理位置查询，确保前TOP_IPS_LIMIT个都有地理信息
+    query_count = CONFIG["TOP_IPS_LIMIT"] - len(custom_targets)
+    if query_count > 0:
+        targets_to_query = other_targets[:query_count]
+    else:
+        targets_to_query = []
+    
+    print(f"需要查询地理位置的目标: {len(targets_to_query)} 个")
+    
+    with tqdm(total=len(targets_to_query), desc="查询地理位置", unit="目标") as pbar:
+        for target_data in targets_to_query:
             target = target_data[0]
             rtt = target_data[1]
             loss = target_data[2]
             speed = target_data[3] if len(target_data) > 3 else 0
             
-            # 检查是否为已格式化目标
-            if target in preformatted_targets:
-                country_code = preformatted_targets[target]['countryCode']
-                comment = preformatted_targets[target]['comment']
-            else:
-                # 对于非格式化目标，只在TOP_IPS_LIMIT范围内进行地理位置查询
-                country_code = 'UN'
-                comment = custom_ip_comments.get(target, '')
-                
-                # 只对前TOP_IPS_LIMIT个目标进行真实地理位置查询
-                if len(enhanced_targets) < CONFIG["TOP_IPS_LIMIT"]:
-                    try:
-                        host = target.split(':')[0]
-                        ipaddress.ip_address(host)  # 验证是否为IP地址
-                        country_code = get_real_ip_country_code(host)
-                    except ValueError:
-                        # 域名不进行地理位置查询
-                        pass
+            country_code = 'UN'
+            comment = custom_ip_comments.get(target, '')
+            
+            # 对需要查询的目标进行地理位置查询
+            try:
+                host = target.split(':')[0]
+                ipaddress.ip_address(host)  # 验证是否为IP地址
+                country_code = get_real_ip_country_code(host)
+            except ValueError:
+                # 域名不进行地理位置查询
+                pass
             
             enhanced_target = {
                 'target': target,
@@ -712,6 +750,31 @@ def enhance_target_with_country_info(target_list):
             }
             enhanced_targets.append(enhanced_target)
             pbar.update(1)
+    
+    # 添加剩余的目标（不进行地理位置查询）
+    remaining_targets = other_targets[query_count:] if query_count > 0 else other_targets
+    for target_data in remaining_targets:
+        target = target_data[0]
+        rtt = target_data[1]
+        loss = target_data[2]
+        speed = target_data[3] if len(target_data) > 3 else 0
+        
+        country_code = 'UN'
+        comment = custom_ip_comments.get(target, '')
+        
+        enhanced_target = {
+            'target': target,
+            'rtt': rtt,
+            'loss': loss,
+            'speed': speed,
+            'countryCode': country_code,
+            'isp': "Cloudflare",
+            'comment': comment
+        }
+        enhanced_targets.append(enhanced_target)
+    
+    print(f"地理位置查询完成: 自定义目标 {len(custom_targets)} 个, API查询 {len(targets_to_query)} 个, 未知 {len(remaining_targets)} 个")
+    print(f"确保前 {CONFIG['TOP_IPS_LIMIT']} 个目标都有地理位置信息")
     
     return enhanced_targets
 
@@ -902,7 +965,10 @@ if __name__ == "__main__":
     print(f"实际测试目标数: {len(ping_results)}")
     print(f"通过延迟测试目标数: {len(passed_targets)}")
     print(f"精选TOP目标: {len(top_targets_for_file)}")
-    print(f"地理位置查询: 仅对前{CONFIG['TOP_IPS_LIMIT']}个目标进行查询")
+    
+    # 统计地理信息情况
+    geo_info_count = sum(1 for target in top_targets_for_file if target['countryCode'] != 'UN')
+    print(f"有地理位置信息的目标: {geo_info_count}/{len(top_targets_for_file)}")
     
     if top_targets_for_file:
         print(f"【最佳目标 TOP10】(按延迟升序排列)")
