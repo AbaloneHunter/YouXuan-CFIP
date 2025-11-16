@@ -21,24 +21,24 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 配置参数
 ####################################################
 CONFIG = {
-    "VERSION": "1.0",  # 版本号
-    "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
+    "VERSION": "1.1",  # 版本号更新
+    "MODE": "TCP",  # 测试模式：TCP/URL_TEST
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
     "PORT": 8443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 50,  # 并发线程数
-    "IP_POOL_SIZE": 50000,  # IP池总大小
-    "TEST_IP_COUNT": 10000,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 200,  # 精选IP数量
+    "THREADS": 500,  # 并发线程数
+    "IP_POOL_SIZE": 100000,  # IP池总大小
+    "TEST_IP_COUNT": 1000,  # 实际测试IP数量
+    "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
+    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
     "GEO_TEST_LIMIT": 200,  # 地理位置测试数量限制
     
     # 备用测试URL列表
@@ -61,7 +61,7 @@ CONFIG = {
         'TH': '🇹🇭', 'MY': '🇲🇾', 'ID': '🇮🇩', 'VN': '🇻🇳', 'PH': '🇵🇭',
         'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
         'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
-        'SO': '🇸🇴', 'UN': '🏴'
+        'UN': '🏴'
     },
     
     # 国家代码到中文名称的映射
@@ -76,7 +76,6 @@ CONFIG = {
         'DE': '德国',
         'GB': '英国',
         'FR': '法国',
-        'SO': '索马里',
         'CA': '加拿大',
         'AU': '澳大利亚',
         'NL': '荷兰',
@@ -538,60 +537,89 @@ def generate_random_ip(subnet):
         return ".".join(parts)
 
 def generate_ip_pool():
-    """根据配置的IP池来源生成IP池"""
+    """根据配置的IP池来源生成IP池，按顺序补齐所测个数"""
     sources_config = CONFIG["IP_POOL_SOURCES"]
     sources = [s.strip() for s in sources_config.split(',')]
     
     print(f"IP池来源配置: {sources_config}")
     
     total_target_pool = set()
+    test_target_count = CONFIG["TEST_IP_COUNT"]
+    
+    # 用于统计各来源的贡献
+    source1_targets = set()
+    source2_targets = set()
+    source3_targets = set()
     
     # 1. 自定义域名和IP
     if '1' in sources:
-        domains, individual_ips, _, preformatted = parse_custom_ips_file()
-        # 直接添加域名
-        total_target_pool.update(domains)
-        # 添加独立IP
-        total_target_pool.update(individual_ips)
-        # 添加已格式化目标
-        total_target_pool.update(preformatted)
+        domains, individual_ips, custom_subnets, preformatted = parse_custom_ips_file()
+        
+        # 收集来源1的所有目标
+        source1_all = set()
+        source1_all.update(domains)
+        source1_all.update(individual_ips)
+        source1_all.update(preformatted)
+        
+        # 添加到总池子
+        total_target_pool.update(source1_all)
+        source1_targets.update(source1_all)
         
         print(f"来源1 - 自定义目标: {len(domains)}个域名, {len(individual_ips)}个IP, {len(preformatted)}个已格式化目标")
+        
+        # 如果来源1已经满足测试数量，直接返回
+        if len(total_target_pool) >= test_target_count:
+            full_target_pool = list(total_target_pool)[:test_target_count]
+            print(f"来源1已满足测试需求，使用前 {len(full_target_pool)} 个目标")
+            return full_target_pool
     
     # 2. 自定义IP段
-    if '2' in sources:
+    if '2' in sources and len(total_target_pool) < test_target_count:
         _, _, custom_subnets, _ = parse_custom_ips_file()
-        custom_ip_count = CONFIG["IP_POOL_SIZE"] // 3
+        needed_count = test_target_count - len(total_target_pool)
         
         custom_ip_pool = set()
         if custom_subnets:
-            print(f"从 {len(custom_subnets)} 个自定义IP段生成IP...")
-            with tqdm(total=min(custom_ip_count, len(custom_subnets) * 10), 
-                     desc="生成自定义IP段", unit="IP") as pbar:
-                while len(custom_ip_pool) < custom_ip_count and custom_subnets:
+            print(f"从 {len(custom_subnets)} 个自定义IP段生成 {needed_count} 个IP...")
+            max_attempts = needed_count * 3  # 最大尝试次数
+            attempts = 0
+            
+            with tqdm(total=needed_count, desc="生成自定义IP段", unit="IP") as pbar:
+                while len(custom_ip_pool) < needed_count and custom_subnets and attempts < max_attempts:
                     subnet = random.choice(list(custom_subnets))
                     ip = generate_random_ip(subnet)
                     # 为生成的IP添加默认端口
                     ip_with_port = f"{ip}:{CONFIG['PORT']}"
-                    if ip_with_port not in custom_ip_pool:
+                    if ip_with_port not in custom_ip_pool and ip_with_port not in total_target_pool:
                         custom_ip_pool.add(ip_with_port)
                         pbar.update(1)
+                    attempts += 1
         
         total_target_pool.update(custom_ip_pool)
-        print(f"来源2 - 自定义IP段: {len(custom_ip_pool)} 个IP")
+        source2_targets.update(custom_ip_pool)
+        print(f"来源2 - 自定义IP段: 添加了 {len(custom_ip_pool)} 个IP")
+        
+        # 如果来源1+2已经满足测试数量，直接返回
+        if len(total_target_pool) >= test_target_count:
+            full_target_pool = list(total_target_pool)[:test_target_count]
+            print(f"来源1+2已满足测试需求，使用前 {len(full_target_pool)} 个目标")
+            return full_target_pool
     
     # 3. 官方Cloudflare IP池
-    if '3' in sources:
+    if '3' in sources and len(total_target_pool) < test_target_count:
         cf_subnets = fetch_ip_ranges()
         if not cf_subnets:
             print("无法获取Cloudflare官方IP段")
         else:
-            cf_ip_count = CONFIG["IP_POOL_SIZE"] // 3
+            needed_count = test_target_count - len(total_target_pool)
             
             cf_ip_pool = set()
-            print(f"从 {len(cf_subnets)} 个Cloudflare官方IP段生成IP...")
-            with tqdm(total=cf_ip_count, desc="生成官方IP", unit="IP") as pbar:
-                while len(cf_ip_pool) < cf_ip_count:
+            print(f"从 {len(cf_subnets)} 个Cloudflare官方IP段生成 {needed_count} 个IP...")
+            max_attempts = needed_count * 3  # 最大尝试次数
+            attempts = 0
+            
+            with tqdm(total=needed_count, desc="生成官方IP", unit="IP") as pbar:
+                while len(cf_ip_pool) < needed_count and attempts < max_attempts:
                     subnet = random.choice(list(cf_subnets))
                     ip = generate_random_ip(subnet)
                     # 为生成的IP添加默认端口
@@ -599,20 +627,28 @@ def generate_ip_pool():
                     if ip_with_port not in cf_ip_pool and ip_with_port not in total_target_pool:
                         cf_ip_pool.add(ip_with_port)
                         pbar.update(1)
+                    attempts += 1
             
             total_target_pool.update(cf_ip_pool)
-            print(f"来源3 - 官方Cloudflare IP池: {len(cf_ip_pool)} 个IP")
+            source3_targets.update(cf_ip_pool)
+            print(f"来源3 - 官方Cloudflare IP池: 添加了 {len(cf_ip_pool)} 个IP")
     
+    # 最终处理
     full_target_pool = list(total_target_pool)
     random.shuffle(full_target_pool)
     
-    print(f"目标池生成完成: 总计 {len(full_target_pool)} 个目标")
+    actual_count = min(test_target_count, len(full_target_pool))
+    final_target_pool = full_target_pool[:actual_count]
     
-    test_target_count = min(CONFIG["TEST_IP_COUNT"], len(full_target_pool))
-    test_target_pool = random.sample(full_target_pool, test_target_count)
-    print(f"随机选择 {len(test_target_pool)} 个目标进行测试")
+    # 统计各来源在最终池子中的贡献
+    source1_final = len([t for t in final_target_pool if t in source1_targets])
+    source2_final = len([t for t in final_target_pool if t in source2_targets])
+    source3_final = len([t for t in final_target_pool if t in source3_targets])
     
-    return test_target_pool
+    print(f"目标池生成完成: 总计 {len(full_target_pool)} 个目标，实际测试 {actual_count} 个")
+    print(f"最终IP池成分: 来源1={source1_final}, 来源2={source2_final}, 来源3={source3_final}")
+    
+    return final_target_pool
 
 def ping_test(target):
     """延迟测试入口"""
