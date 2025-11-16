@@ -22,7 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ####################################################
 CONFIG = {
     "VERSION": "1.0",  # 版本号
-    "MODE": "TCP",  # 测试模式：TCP/URL_TEST
+    "MODE": "URL_TEST",  # 测试模式：TCP/URL_TEST
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
@@ -30,9 +30,9 @@ CONFIG = {
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 50,  # 并发线程数
-    "IP_POOL_SIZE": 1000,  # IP池总大小
-    "TEST_IP_COUNT": 1000,  # 实际测试IP数量
-    "TOP_IPS_LIMIT": 100,  # 精选IP数量
+    "IP_POOL_SIZE": 50000,  # IP池总大小
+    "TEST_IP_COUNT": 10000,  # 实际测试IP数量
+    "TOP_IPS_LIMIT": 200,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
     "TCP_RETRY": 2,  # TCP重试次数
