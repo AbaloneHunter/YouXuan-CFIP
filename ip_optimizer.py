@@ -26,11 +26,11 @@ CONFIG = {
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
-    "PORT": 443,  # TCP测试端口
+    "PORT": 8443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
-    "THREADS": 300,  # 并发线程数
-    "IP_POOL_SIZE": 20000,  # IP池总大小
+    "THREADS": 500,  # 并发线程数
+    "IP_POOL_SIZE": 50000,  # IP池总大小
     "TEST_IP_COUNT": 5000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
@@ -38,7 +38,7 @@ CONFIG = {
     "TCP_RETRY": 2,  # TCP重试次数
     "SPEED_TIMEOUT": 5,  # 测速超时时间
     "SPEED_URL": "https://speed.cloudflare.com/__down?bytes=10000000",  # 测速URL
-    "IP_POOL_SOURCES": "2",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
+    "IP_POOL_SOURCES": "1,2,3",  # IP池来源：1=自定义域名和IP, 2=自定义IP段, 3=CLOUDFLARE_IPS_URL
     
     # 备用测试URL列表
     "BACKUP_TEST_URLS": [
@@ -883,10 +883,13 @@ if __name__ == "__main__":
 
     os.makedirs('results', exist_ok=True)
     
+    # top_targets.txt 只输出TOP_IPS_LIMIT数量的目标
+    top_targets_for_file = sorted_targets[:CONFIG["TOP_IPS_LIMIT"]]
     with open('results/top_targets.txt', 'w', encoding='utf-8') as f:
-        formatted_lines = format_target_list_for_file(sorted_targets)
+        formatted_lines = format_target_list_for_file(top_targets_for_file)
         f.write("\n".join(formatted_lines))
     
+    # top_targets_details.csv 输出所有通过测试的目标的详细数据
     with open('results/top_targets_details.csv', 'w', encoding='utf-8') as f:
         f.write("目标,延迟(ms),丢包率(%),速度(Mbps),国家代码,国家名称,ISP,注释\n")
         for target_data in sorted_targets:
@@ -898,19 +901,19 @@ if __name__ == "__main__":
     print("="*60)
     print(f"实际测试目标数: {len(ping_results)}")
     print(f"通过延迟测试目标数: {len(passed_targets)}")
-    print(f"精选TOP目标: {len(sorted_targets)}")
+    print(f"精选TOP目标: {len(top_targets_for_file)}")
     print(f"地理位置查询: 仅对前{CONFIG['TOP_IPS_LIMIT']}个目标进行查询")
     
-    if sorted_targets:
+    if top_targets_for_file:
         print(f"【最佳目标 TOP10】(按延迟升序排列)")
-        formatted_top_targets = format_target_list_for_display(sorted_targets[:10])
+        formatted_top_targets = format_target_list_for_display(top_targets_for_file[:10])
         for i, formatted_target in enumerate(formatted_top_targets, 1):
-            target_data = sorted_targets[i-1]
+            target_data = top_targets_for_file[i-1]
             print(f"{i:2d}. {formatted_target} (延迟:{target_data['rtt']:.1f}ms, 速度:{target_data['speed']:.1f}Mbps)")
     
     print("="*60)
     print("结果已保存至 results/ 目录")
     print("文件说明:")
-    print("   - top_targets.txt: 精选目标列表")
-    print("   - top_targets_details.csv: 详细性能数据")
+    print(f"   - top_targets.txt: 精选前{CONFIG['TOP_IPS_LIMIT']}个目标列表")
+    print("   - top_targets_details.csv: 所有通过测试目标的详细数据")
     print("="*60)
