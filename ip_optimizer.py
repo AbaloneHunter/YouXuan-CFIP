@@ -26,12 +26,12 @@ CONFIG = {
     "URL_TEST_TARGET": "http://www.gstatic.com/generate_204",  # URL测试目标
     "URL_TEST_TIMEOUT": 3,  # URL测试超时(秒)
     "URL_TEST_RETRY": 3,  # URL测试重试次数
-    "PORT": 8443,  # TCP测试端口
+    "PORT": 443,  # TCP测试端口
     "RTT_RANGE": "0~100",  # 延迟范围(ms)
     "LOSS_MAX": 1.0,  # 最大丢包率(%)
     "THREADS": 500,  # 并发线程数
-    "IP_POOL_SIZE": 100000,  # IP池总大小
-    "TEST_IP_COUNT": 10000,  # 实际测试IP数量
+    "IP_POOL_SIZE": 50000,  # IP池总大小
+    "TEST_IP_COUNT": 5000,  # 实际测试IP数量
     "TOP_IPS_LIMIT": 100,  # 精选IP数量
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
     "CUSTOM_IPS_FILE": "custom_ips.txt",  # 自定义IP池文件路径
@@ -537,50 +537,49 @@ def generate_random_ip(subnet):
         return ".".join(parts)
 
 def generate_ip_pool():
-    """根据配置的IP池来源生成IP池，按顺序补齐所测个数"""
+    """根据配置的IP池来源生成IP池，按顺序补齐所需数量"""
     sources_config = CONFIG["IP_POOL_SOURCES"]
     sources = [s.strip() for s in sources_config.split(',')]
     
     print(f"IP池来源配置: {sources_config}")
     
     total_target_pool = set()
-    test_target_count = CONFIG["TEST_IP_COUNT"]
-    
-    # 用于统计各来源的贡献
-    source1_targets = set()
-    source2_targets = set()
-    source3_targets = set()
+    target_pool_size = CONFIG["IP_POOL_SIZE"]
     
     # 1. 自定义域名和IP
     if '1' in sources:
         domains, individual_ips, custom_subnets, preformatted = parse_custom_ips_file()
         
         # 收集来源1的所有目标
-        source1_all = set()
-        source1_all.update(domains)
-        source1_all.update(individual_ips)
-        source1_all.update(preformatted)
+        source1_targets = set()
+        source1_targets.update(domains)
+        source1_targets.update(individual_ips)
+        source1_targets.update(preformatted)
         
         # 添加到总池子
-        total_target_pool.update(source1_all)
-        source1_targets.update(source1_all)
+        total_target_pool.update(source1_targets)
         
         print(f"来源1 - 自定义目标: {len(domains)}个域名, {len(individual_ips)}个IP, {len(preformatted)}个已格式化目标")
+        print(f"来源1贡献: {len(source1_targets)} 个目标")
         
-        # 如果来源1已经满足测试数量，直接返回
-        if len(total_target_pool) >= test_target_count:
-            full_target_pool = list(total_target_pool)[:test_target_count]
-            print(f"来源1已满足测试需求，使用前 {len(full_target_pool)} 个目标")
-            return full_target_pool
+        # 如果来源1已经满足大池数量，直接使用
+        if len(total_target_pool) >= target_pool_size:
+            full_target_pool = list(total_target_pool)[:target_pool_size]
+            print(f"来源1已满足大池需求，使用前 {len(full_target_pool)} 个目标")
+            
+            # 从大池中随机选择测试目标
+            test_target_count = min(CONFIG["TEST_IP_COUNT"], len(full_target_pool))
+            test_target_pool = random.sample(full_target_pool, test_target_count)
+            print(f"从大池中随机选择 {len(test_target_pool)} 个目标进行测试")
+            return test_target_pool
     
-    # 2. 自定义IP段
-    if '2' in sources and len(total_target_pool) < test_target_count:
-        _, _, custom_subnets, _ = parse_custom_ips_file()
-        needed_count = test_target_count - len(total_target_pool)
+    # 2. 自定义IP段 - 补齐到目标数量
+    if '2' in sources and len(total_target_pool) < target_pool_size:
+        needed_count = target_pool_size - len(total_target_pool)
         
         custom_ip_pool = set()
         if custom_subnets:
-            print(f"从 {len(custom_subnets)} 个自定义IP段生成 {needed_count} 个IP...")
+            print(f"从 {len(custom_subnets)} 个自定义IP段生成 {needed_count} 个IP补齐大池...")
             max_attempts = needed_count * 3  # 最大尝试次数
             attempts = 0
             
@@ -596,25 +595,29 @@ def generate_ip_pool():
                     attempts += 1
         
         total_target_pool.update(custom_ip_pool)
-        source2_targets.update(custom_ip_pool)
         print(f"来源2 - 自定义IP段: 添加了 {len(custom_ip_pool)} 个IP")
         
-        # 如果来源1+2已经满足测试数量，直接返回
-        if len(total_target_pool) >= test_target_count:
-            full_target_pool = list(total_target_pool)[:test_target_count]
-            print(f"来源1+2已满足测试需求，使用前 {len(full_target_pool)} 个目标")
-            return full_target_pool
+        # 如果来源1+2已经满足大池数量，直接使用
+        if len(total_target_pool) >= target_pool_size:
+            full_target_pool = list(total_target_pool)[:target_pool_size]
+            print(f"来源1+2已满足大池需求，使用前 {len(full_target_pool)} 个目标")
+            
+            # 从大池中随机选择测试目标
+            test_target_count = min(CONFIG["TEST_IP_COUNT"], len(full_target_pool))
+            test_target_pool = random.sample(full_target_pool, test_target_count)
+            print(f"从大池中随机选择 {len(test_target_pool)} 个目标进行测试")
+            return test_target_pool
     
-    # 3. 官方Cloudflare IP池
-    if '3' in sources and len(total_target_pool) < test_target_count:
+    # 3. 官方Cloudflare IP池 - 补齐到目标数量
+    if '3' in sources and len(total_target_pool) < target_pool_size:
         cf_subnets = fetch_ip_ranges()
         if not cf_subnets:
             print("无法获取Cloudflare官方IP段")
         else:
-            needed_count = test_target_count - len(total_target_pool)
+            needed_count = target_pool_size - len(total_target_pool)
             
             cf_ip_pool = set()
-            print(f"从 {len(cf_subnets)} 个Cloudflare官方IP段生成 {needed_count} 个IP...")
+            print(f"从 {len(cf_subnets)} 个Cloudflare官方IP段生成 {needed_count} 个IP补齐大池...")
             max_attempts = needed_count * 3  # 最大尝试次数
             attempts = 0
             
@@ -630,25 +633,23 @@ def generate_ip_pool():
                     attempts += 1
             
             total_target_pool.update(cf_ip_pool)
-            source3_targets.update(cf_ip_pool)
             print(f"来源3 - 官方Cloudflare IP池: 添加了 {len(cf_ip_pool)} 个IP")
     
-    # 最终处理
+    # 最终处理 - 确保不超过目标大小
     full_target_pool = list(total_target_pool)
     random.shuffle(full_target_pool)
     
-    actual_count = min(test_target_count, len(full_target_pool))
-    final_target_pool = full_target_pool[:actual_count]
+    actual_pool_size = min(target_pool_size, len(full_target_pool))
+    final_full_pool = full_target_pool[:actual_pool_size]
     
-    # 统计各来源在最终池子中的贡献
-    source1_final = len([t for t in final_target_pool if t in source1_targets])
-    source2_final = len([t for t in final_target_pool if t in source2_targets])
-    source3_final = len([t for t in final_target_pool if t in source3_targets])
+    print(f"\nIP大池构建完成: 总计 {len(full_target_pool)} 个目标，使用前 {actual_pool_size} 个")
     
-    print(f"目标池生成完成: 总计 {len(full_target_pool)} 个目标，实际测试 {actual_count} 个")
-    print(f"最终IP池成分: 来源1={source1_final}, 来源2={source2_final}, 来源3={source3_final}")
+    # 从大池中随机选择实际测试的目标
+    test_target_count = min(CONFIG["TEST_IP_COUNT"], len(final_full_pool))
+    test_target_pool = random.sample(final_full_pool, test_target_count)
+    print(f"从大池中随机选择 {len(test_target_pool)} 个目标进行测试")
     
-    return final_target_pool
+    return test_target_pool
 
 def ping_test(target):
     """延迟测试入口"""
@@ -781,7 +782,8 @@ if __name__ == "__main__":
     print(f"延迟范围: {CONFIG['RTT_RANGE']}ms")
     print(f"最大丢包: {CONFIG['LOSS_MAX']}%")
     print(f"并发线程: {CONFIG['THREADS']}")
-    print(f"测试目标数: {CONFIG['TEST_IP_COUNT']}")
+    print(f"IP大池大小: {CONFIG['IP_POOL_SIZE']}")
+    print(f"实际测试数: {CONFIG['TEST_IP_COUNT']}")
     print(f"精选目标数: {CONFIG['TOP_IPS_LIMIT']}")
     print("="*60 + "\n")
 
