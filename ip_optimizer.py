@@ -61,7 +61,7 @@ CONFIG = {
         'TH': '🇹🇭', 'MY': '🇲🇾', 'ID': '🇮🇩', 'VN': '🇻🇳', 'PH': '🇵🇭',
         'BR': '🇧🇷', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴',
         'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪',
-        'UN': '🏴'
+        'SO': '🇸🇴', 'UN': '🏴'
     },
     
     # 国家代码到中文名称的映射
@@ -76,6 +76,7 @@ CONFIG = {
         'DE': '德国',
         'GB': '英国',
         'FR': '法国',
+        'SO': '索马里',
         'CA': '加拿大',
         'AU': '澳大利亚',
         'NL': '荷兰',
@@ -139,6 +140,27 @@ preformatted_targets = {}  # 记录已格式化的目标信息
 # 辅助函数
 ####################################################
 
+def parse_target_with_port(target_str, default_port=None):
+    """解析目标字符串，支持自定义端口"""
+    if default_port is None:
+        default_port = CONFIG["PORT"]
+    
+    # 检查是否包含端口
+    if ':' in target_str:
+        parts = target_str.rsplit(':', 1)
+        if len(parts) == 2:
+            # 格式: ip:port 或 domain:port
+            host = parts[0]
+            try:
+                port = int(parts[1])
+                return host, port, f"{host}:{port}"
+            except ValueError:
+                # 端口不是数字，使用默认端口
+                pass
+    
+    # 没有端口或端口无效，使用默认端口
+    return target_str, default_port, f"{target_str}:{default_port}"
+
 def is_preformatted_target(line):
     """检测是否为已格式化的目标（包含#和国旗）"""
     return '#' in line and any(flag in line for flag in CONFIG["COUNTRY_FLAGS"].values())
@@ -149,22 +171,61 @@ def parse_preformatted_target(line):
         # 分离目标和国家信息
         target_part, country_part = line.split('#', 1)
         
-        # 提取目标（IP:端口 或 域名:端口）
+        # 检查是否已包含端口
         if ':' in target_part:
+            # 如果已经包含端口，直接使用
             target = target_part
+            host, port, _ = parse_target_with_port(target_part)
         else:
-            target = target_part + ':' + str(CONFIG["PORT"])
+            # 如果不包含端口，添加默认端口
+            host = target_part
+            port = CONFIG["PORT"]
+            target = f"{target_part}:{port}"
         
         # 提取国家代码
         country_code = 'UN'
-        for code, name in CONFIG["COUNTRY_NAMES"].items():
-            if name + '·' + code in country_part:
+        for code, flag in CONFIG["COUNTRY_FLAGS"].items():
+            if flag in country_part:
                 country_code = code
                 break
         
-        return target, country_code, line
-    except:
-        return None, 'UN', line
+        # 提取注释
+        comment = ''
+        for code, name in CONFIG["COUNTRY_NAMES"].items():
+            if name in country_part:
+                # 移除国家信息部分，剩下的就是注释
+                comment = country_part.replace(flag, '').replace(name, '').replace('·' + code, '').strip()
+                break
+        
+        return target, country_code, comment, line
+    except Exception as e:
+        print(f"解析格式化目标失败: {line}, 错误: {e}")
+        return None, 'UN', '', line
+
+def parse_simple_target(line):
+    """解析简单目标（IP/域名 + 可选注释）"""
+    try:
+        if '#' in line:
+            content, comment = line.split('#', 1)
+            content = content.strip()
+            comment = comment.strip()
+        else:
+            content = line.strip()
+            comment = ''
+        
+        # 检查是否包含端口
+        if ':' in content:
+            target = content
+            host, port, _ = parse_target_with_port(content)
+        else:
+            host = content
+            port = CONFIG["PORT"]
+            target = f"{content}:{port}"
+        
+        return target, comment
+    except Exception as e:
+        print(f"解析简单目标失败: {line}, 错误: {e}")
+        return None, ''
 
 ####################################################
 # IP地理位置查询函数
@@ -222,7 +283,7 @@ def get_real_ip_country_code(ip):
 ####################################################
 
 def url_test(target, url=None, timeout=None, retry=None):
-    """URL Test模式延迟检测"""
+    """URL Test模式延迟检测，支持自定义端口"""
     if url is None:
         url = CONFIG["URL_TEST_TARGET"]
     if timeout is None:
@@ -234,13 +295,8 @@ def url_test(target, url=None, timeout=None, retry=None):
     total_rtt = 0
     delays = []
     
-    # 提取纯主机名（去除端口）
-    if ':' in target:
-        host = target.split(':')[0]
-        port = int(target.split(':')[1])
-    else:
-        host = target
-        port = CONFIG["PORT"]
+    # 解析目标，提取主机和端口
+    host, port, _ = parse_target_with_port(target)
     
     parsed_url = urlparse(url)
     scheme = parsed_url.scheme.lower()
@@ -258,14 +314,14 @@ def url_test(target, url=None, timeout=None, retry=None):
                 
                 conn = http.client.HTTPSConnection(
                     host, 
-                    port=port, 
+                    port=port,  # 使用解析出的端口
                     timeout=timeout,
                     context=context
                 )
             else:
                 conn = http.client.HTTPConnection(
                     host,
-                    port=port,
+                    port=port,  # 使用解析出的端口
                     timeout=timeout
                 )
             
@@ -315,24 +371,19 @@ def smart_url_test(target, url=None, timeout=None, retry=None):
 # 其他测试函数
 ####################################################
 
-def tcp_ping(target, port, timeout=2):
-    """TCP Ping测试"""
+def tcp_ping(target, default_port=443, timeout=2):
+    """TCP Ping测试，支持自定义端口"""
     retry = CONFIG["TCP_RETRY"]
     success_count = 0
     total_rtt = 0
     
-    # 提取纯主机名
-    if ':' in target:
-        host = target.split(':')[0]
-        actual_port = int(target.split(':')[1])
-    else:
-        host = target
-        actual_port = port
+    # 解析目标，提取主机和端口
+    host, port, _ = parse_target_with_port(target, default_port)
     
     for _ in range(retry):
         start = time.time()
         try:
-            with socket.create_connection((host, actual_port), timeout=timeout) as sock:
+            with socket.create_connection((host, port), timeout=timeout) as sock:
                 rtt = (time.time() - start) * 1000
                 total_rtt += rtt
                 success_count += 1
@@ -345,21 +396,30 @@ def tcp_ping(target, port, timeout=2):
     return avg_rtt, loss_rate
 
 def speed_test(target):
-    """速度测试"""
+    """速度测试，支持自定义端口"""
     url = CONFIG["SPEED_URL"]
     timeout = CONFIG["SPEED_TIMEOUT"]
     try:
-        # 提取纯主机名
-        if ':' in target:
-            host = target.split(':')[0]
-        else:
-            host = target
+        # 解析目标，提取主机和端口
+        host, port, _ = parse_target_with_port(target)
             
         parsed_url = urlparse(url)
         hostname = parsed_url.hostname
         start_time = time.time()
+        
+        # 构建代理配置或直接使用目标主机和端口
+        proxies = {
+            'http': f'http://{host}:{port}',
+            'https': f'https://{host}:{port}'
+        }
+        
         response = requests.get(
-            url, headers={'Host': hostname}, timeout=timeout, verify=False, stream=True
+            url, 
+            headers={'Host': hostname}, 
+            timeout=timeout, 
+            verify=False, 
+            stream=True,
+            proxies=proxies
         )
         total_bytes = 0
         for chunk in response.iter_content(chunk_size=8192):
@@ -403,48 +463,44 @@ def parse_custom_ips_file():
                 
                 # 检测是否为已格式化的目标
                 if is_preformatted_target(line):
-                    target, country_code, original_line = parse_preformatted_target(line)
+                    target, country_code, comment, original_line = parse_preformatted_target(line)
                     if target:
                         preformatted.add(target)
                         preformatted_targets[target] = {
                             'countryCode': country_code,
+                            'comment': comment,
                             'original_line': original_line
                         }
                     continue
                 
-                # 分离注释
-                if '#' in line:
-                    content, comment = line.split('#', 1)
-                    content = content.strip()
-                    if not content:
+                # 解析简单目标（IP/域名 + 可选注释）
+                target, comment = parse_simple_target(line)
+                if target:
+                    # 检测是否为域名
+                    if any(c.isalpha() for c in target.split(':')[0]) and '.' in target.split(':')[0]:
+                        domains.add(target)
+                        if comment:
+                            custom_ip_comments[target] = comment
                         continue
-                else:
-                    content = line
-                    comment = None
-                
-                # 检测是否为域名
-                if any(c.isalpha() for c in content) and '.' in content:
-                    domains.add(content)
-                    if comment:
-                        custom_ip_comments[content] = comment
-                    continue
-                
-                # 尝试解析为IP地址
-                try:
-                    ip_obj = ipaddress.ip_address(content)
-                    individual_ips.add(content)
-                    if comment:
-                        custom_ip_comments[content] = comment
-                    continue
-                except ValueError:
-                    pass
-                
-                # 尝试解析为IP段
-                try:
-                    network = ipaddress.ip_network(content, strict=False)
-                    ip_subnets.add(str(network))
-                except ValueError:
-                    print(f"第{line_num}行格式错误: {line}")
+                    
+                    # 尝试解析为IP地址
+                    try:
+                        host = target.split(':')[0]
+                        ip_obj = ipaddress.ip_address(host)
+                        individual_ips.add(target)
+                        if comment:
+                            custom_ip_comments[target] = comment
+                        continue
+                    except ValueError:
+                        pass
+                    
+                    # 尝试解析为IP段
+                    try:
+                        host = target.split(':')[0]
+                        network = ipaddress.ip_network(host, strict=False)
+                        ip_subnets.add(str(network))
+                    except ValueError:
+                        print(f"第{line_num}行格式错误: {line}")
         
         print(f"自定义IP池解析完成: {len(domains)}个域名, {len(individual_ips)}个独立IP, {len(ip_subnets)}个IP段, {len(preformatted)}个已格式化目标")
         
@@ -515,8 +571,10 @@ def generate_ip_pool():
                 while len(custom_ip_pool) < custom_ip_count and custom_subnets:
                     subnet = random.choice(list(custom_subnets))
                     ip = generate_random_ip(subnet)
-                    if ip not in custom_ip_pool:
-                        custom_ip_pool.add(ip)
+                    # 为生成的IP添加默认端口
+                    ip_with_port = f"{ip}:{CONFIG['PORT']}"
+                    if ip_with_port not in custom_ip_pool:
+                        custom_ip_pool.add(ip_with_port)
                         pbar.update(1)
         
         total_target_pool.update(custom_ip_pool)
@@ -536,8 +594,10 @@ def generate_ip_pool():
                 while len(cf_ip_pool) < cf_ip_count:
                     subnet = random.choice(list(cf_subnets))
                     ip = generate_random_ip(subnet)
-                    if ip not in cf_ip_pool and ip not in total_target_pool:
-                        cf_ip_pool.add(ip)
+                    # 为生成的IP添加默认端口
+                    ip_with_port = f"{ip}:{CONFIG['PORT']}"
+                    if ip_with_port not in cf_ip_pool and ip_with_port not in total_target_pool:
+                        cf_ip_pool.add(ip_with_port)
                         pbar.update(1)
             
             total_target_pool.update(cf_ip_pool)
@@ -588,7 +648,7 @@ def enhance_target_with_country_info(target_list):
             # 检查是否为已格式化目标
             if target in preformatted_targets:
                 country_code = preformatted_targets[target]['countryCode']
-                comment = preformatted_targets[target]['original_line']
+                comment = preformatted_targets[target]['comment']
             else:
                 # 只有未格式化的IP地址才进行地理位置查询
                 country_code = 'UN'
@@ -596,11 +656,7 @@ def enhance_target_with_country_info(target_list):
                 
                 # 提取纯IP地址进行查询
                 try:
-                    if ':' in target:
-                        host = target.split(':')[0]
-                    else:
-                        host = target
-                    
+                    host = target.split(':')[0]
                     ipaddress.ip_address(host)
                     # 只对前GEO_TEST_LIMIT个目标进行真实地理位置查询
                     if len(enhanced_targets) < CONFIG["GEO_TEST_LIMIT"]:
@@ -632,10 +688,10 @@ def get_country_display_name(country_code):
     country_name = CONFIG["COUNTRY_NAMES"].get(country_code, country_code)
     return f"{country_name}·{country_code}"
 
-def format_target_output(target_data, port=None):
-    """输出格式化目标"""
-    if port is None:
-        port = CONFIG["PORT"]
+def format_target_output(target_data):
+    """输出格式化目标，保持原有端口和地区信息"""
+    # 直接从target_data中获取完整的目标（可能已包含端口）
+    full_target = target_data['target']
     
     country_code = target_data.get('countryCode', 'UN')
     flag = CONFIG["COUNTRY_FLAGS"].get(country_code, '🏴')
@@ -647,29 +703,23 @@ def format_target_output(target_data, port=None):
     
     # 添加注释
     comment = target_data.get('comment', '')
-    comment_str = f"{comment}" if comment else ''
+    comment_str = f" {comment}" if comment else ''
     
-    return f"{target_data['target']}:{port}#{flag}{country_display}{comment_str}"
+    return f"{full_target}#{flag}{country_display}{comment_str}"
 
-def format_target_list_for_display(target_list, port=None):
+def format_target_list_for_display(target_list):
     """格式化目标列表用于显示"""
-    if port is None:
-        port = CONFIG["PORT"]
-    
     formatted_targets = []
     for target_data in target_list:
-        formatted_targets.append(format_target_output(target_data, port))
+        formatted_targets.append(format_target_output(target_data))
     
     return formatted_targets
 
-def format_target_list_for_file(target_list, port=None):
+def format_target_list_for_file(target_list):
     """格式化目标列表用于文件保存"""
-    if port is None:
-        port = CONFIG["PORT"]
-    
     formatted_lines = []
     for target_data in target_list:
-        formatted_lines.append(format_target_output(target_data, port))
+        formatted_lines.append(format_target_output(target_data))
     
     return formatted_lines
 
