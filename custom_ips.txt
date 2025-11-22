@@ -320,6 +320,9 @@ www.shopify.com:443#🏴‍☠️未知·UN
 staticdelivery.nexusmods.com:443#🏴‍☠️未知·UN
 cf.tencentapp.cn:443#🏴‍☠️未知·UN
 www.visa.cn:443#🏴‍☠️未知·UN
+cf.008500.xyz:8443#🏴‍☠️未知·UN
+ip2.242625.xyz:8443#🏴‍☠️未知·UN
+freeyx.cloudflare88.eu.org:2096#🏴‍☠️未知·UN
 
 1.221.122.0/24
 2.59.218.0/24
