@@ -24,19 +24,19 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 配置参数
 ####################################################
 CONFIG = {
-    "VERSION": "2.7",               # 版本号
+    "VERSION": "2.8",               # 版本号
     "MODE": "TCP",                   # 测试模式：TCP / URL_TEST
 
     # === 延迟测试参数 ===
     "PORT": 443,                     # TCP测试端口
-    "TCP_RETRY": 4,                  # 每个IP测延迟次数，取平均（XIU2默认4）
+    "TCP_RETRY": 4,                  # 每个IP测延迟次数，取平均
     "TCP_TIMEOUT": 2,                # TCP连接超时(秒)
-    "RTT_MAX": 200,                  # 最大延迟(ms)，超过则丢弃（XIU2默认200ms）
-    "LOSS_MAX": 30.0,                # 最大丢包率(%)（XIU2默认30%）
-    "THREADS": 50,                  # 并发线程数
+    "RTT_MAX": 300,                  # 最大延迟(ms)，超过则丢弃
+    "LOSS_MAX": 20.0,                # 最大丢包率(%)
+    "THREADS": 100,                  # 并发线程数
 
     # === 速度测试参数 ===
-    "SPEED_MIN": 5.0,                # 期望最低速度，0=不过滤；设10表示≥10Mbps才保留
+    "SPEED_MIN": 10.0,                # 期望最低速度，0=不过滤；设10表示≥10Mbps才保留
     "SPEED_TEST_BYTES": 10485760,    # 测速下载量(字节)，默认10MB
     "SPEED_TIMEOUT": 10,             # 测速超时(秒)
 
@@ -45,7 +45,7 @@ CONFIG = {
     "TEST_IP_COUNT": 5000,           # 实际测试IP数量
     "TOP_IPS_LIMIT": 300,            # 最终输出TOP数量
     # ★ 中文配置，逗号分隔，可选：自定义域名和IP,自定义IP段,官方CloudflareIP段
-    "IP_POOL_SOURCES": "自定义域名和IP,自定义IP段",
+    "IP_POOL_SOURCES": "自定义域名和IP,自定义IP段,官方CloudflareIP段",
 
     # === Cloudflare 官方IP段 ===
     "CLOUDFLARE_IPS_URL": "https://www.cloudflare.com/ips-v4",
@@ -53,7 +53,7 @@ CONFIG = {
     "CUSTOM_IPS_FILE": "custom_ips.txt",
 
     # === URL下载镜像（GitHub等链接自动加国内前缀）===
-    "URL_DOWNLOAD_TIMEOUT": 15,
+    "URL_DOWNLOAD_TIMEOUT": 10,
     "URL_DOWNLOAD_MAX_RETRIES": 2,
     "URL_MIRROR_PREFIXES": [
         "https://gh-proxy.com/"
@@ -194,23 +194,32 @@ def is_preformatted_target(line):
     return '#' in line and any(flag in line for flag in CONFIG["COUNTRY_FLAGS"].values())
 
 def parse_preformatted_target(line):
-    """解析已格式化的目标"""
+    """解析已格式化的目标，严格提取注释"""
     try:
         target_part, country_part = line.split('#', 1)
         target_part = target_part.strip()
         host, port, target = parse_target_with_port(target_part)
 
         country_code = 'UN'
-        for code, flag in CONFIG["COUNTRY_FLAGS"].items():
-            if flag in country_part:
+        flag = ''
+        for code, fl in CONFIG["COUNTRY_FLAGS"].items():
+            if fl in country_part:
                 country_code = code
+                flag = fl
                 break
 
-        comment = ''
-        for code, name in CONFIG["COUNTRY_NAMES"].items():
-            if name in country_part:
-                comment = country_part.replace(flag, '').replace(name, '').replace('·' + code, '').strip()
-                break
+        # 提取纯净的注释：去除 flag, 国家名·国家码, 以及单独的国家码和国家名
+        comment = country_part
+        if flag:
+            comment = comment.replace(flag, ' ')
+        if country_code != 'UN':
+            country_name = CONFIG["COUNTRY_NAMES"].get(country_code, '')
+            comment = comment.replace(f"{country_name}·{country_code}", ' ')
+            comment = comment.replace(country_name, ' ')
+            comment = comment.replace(country_code, ' ')
+        
+        # 压缩多余的空格
+        comment = ' '.join(comment.split()).strip()
 
         return target, country_code, comment, line
     except Exception as e:
@@ -299,6 +308,7 @@ def parse_downloaded_lines(lines):
     domains = []
     individual_ips = set()
     ip_subnets = set()
+    preformatted = set()
 
     for line in lines:
         line = line.strip()
@@ -307,12 +317,20 @@ def parse_downloaded_lines(lines):
         if is_url(line):
             nested_lines = download_url_content(line)
             if nested_lines:
-                d, i, s = parse_downloaded_lines(nested_lines)
+                d, i, s, p = parse_downloaded_lines(nested_lines)
                 domains.extend(d)
                 individual_ips.update(i)
                 ip_subnets.update(s)
+                preformatted.update(p)
             continue
+        
         if is_preformatted_target(line):
+            target, country_code, comment, original_line = parse_preformatted_target(line)
+            if target:
+                preformatted.add(target)
+                preformatted_targets[target] = {
+                    'countryCode': country_code, 'comment': comment, 'original_line': original_line
+                }
             continue
 
         target, comment = parse_simple_target(line)
@@ -336,7 +354,7 @@ def parse_downloaded_lines(lines):
         except ValueError:
             pass
 
-    return domains, individual_ips, ip_subnets
+    return domains, individual_ips, ip_subnets, preformatted
 
 
 ####################################################
@@ -500,7 +518,7 @@ def cf_speed_test(test_host, port, download_bytes, timeout):
         request = (
             f"GET {path} HTTP/1.1\r\n"
             f"Host: speed.cloudflare.com\r\n"
-            f"User-Agent: Mozilla/5.0 (compatible; CF-SpeedTest/2.7)\r\n"
+            f"User-Agent: Mozilla/5.0 (compatible; CF-SpeedTest/2.8)\r\n"
             f"Accept: */*\r\n"
             f"Connection: close\r\n"
             f"\r\n"
@@ -575,7 +593,7 @@ def domain_fallback_speed_test(host, port, timeout):
         request = (
             f"GET / HTTP/1.1\r\n"
             f"Host: {host}\r\n"
-            f"User-Agent: Mozilla/5.0 (compatible; CF-SpeedTest/2.7)\r\n"
+            f"User-Agent: Mozilla/5.0 (compatible; CF-SpeedTest/2.8)\r\n"
             f"Accept: */*\r\n"
             f"Connection: close\r\n"
             f"\r\n"
@@ -618,7 +636,6 @@ def domain_fallback_speed_test(host, port, timeout):
                 break
 
         duration = time.time() - start_time
-        # 至少下载了 100KB 才算有效，否则可能是空页面
         if duration > 0 and total_bytes > 100000:
             return (total_bytes * 8 / duration) / 1e6
         return 0.0
@@ -632,9 +649,7 @@ def domain_fallback_speed_test(host, port, timeout):
                 pass
 
 def speed_test(target):
-    """
-    速度测试入口：如果是域名，先解析真实IP用原生接口测，失败则降级用域名直连测。
-    """
+    """速度测试入口"""
     download_bytes = CONFIG["SPEED_TEST_BYTES"]
     timeout = CONFIG["SPEED_TIMEOUT"]
     host, port, _ = parse_target_with_port(target)
@@ -644,7 +659,6 @@ def speed_test(target):
 
     if is_domain:
         try:
-            # 优先尝试解析 IPv4，避免本地 IPv6 网络不通导致失败
             addrs = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
             if not addrs:
                 addrs = socket.getaddrinfo(host, port, socket.AF_INET6, socket.SOCK_STREAM)
@@ -654,7 +668,7 @@ def speed_test(target):
         except Exception:
             return 0.0
 
-    # 1. 尝试使用 speed.cloudflare.com 接口测速
+    # 1. 优先使用 speed.cloudflare.com 接口测速
     speed = cf_speed_test(test_host, port, download_bytes, timeout)
     if speed > 0:
         return speed
@@ -725,10 +739,11 @@ def parse_custom_ips_file():
                     print(f"\n  [URL下载] 第{line_num}行: {line}")
                     downloaded_lines = download_url_content(line)
                     if downloaded_lines:
-                        dl_domains, dl_ips, dl_subnets = parse_downloaded_lines(downloaded_lines)
+                        dl_domains, dl_ips, dl_subnets, dl_pre = parse_downloaded_lines(downloaded_lines)
                         domains.update(dl_domains)
                         individual_ips.update(dl_ips)
                         ip_subnets.update(dl_subnets)
+                        preformatted.update(dl_pre)
                         print(f"  [URL下载完成] 新增: {len(dl_domains)}域名, {len(dl_ips)}IP, {len(dl_subnets)}网段")
                     continue
 
@@ -945,11 +960,9 @@ def format_target_output(target_data):
     flag = CONFIG["COUNTRY_FLAGS"].get(country_code, '🏴')
     country_display = get_country_display_name(country_code)
 
-    if target_data['target'] in preformatted_targets:
-        return preformatted_targets[target_data['target']]['original_line']
-
     comment = target_data.get('comment', '')
     comment_str = f" {comment}" if comment else ''
+    # 统一格式化输出，不再原样输出原始行
     return f"{full_target}#{flag}{country_display}{comment_str}"
 
 
